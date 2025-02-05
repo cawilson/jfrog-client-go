@@ -2,7 +2,6 @@ package tests
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
@@ -27,6 +26,7 @@ func ctxMgr(t *testing.T, artDetails auth.ServiceDetails, ctx context.Context) (
 func testCtx(t *testing.T) {
 	artDetails := GetRtDetails()
 	sm, err := ctxMgr(t, artDetails, context.Background())
+	assert.NoError(t, err)
 	_, err = sm.GetVersion()
 	assert.NoError(t, err)
 }
@@ -36,10 +36,9 @@ func testCtxTimeout(t *testing.T) {
 	timeoutCtx, cancel := context.WithTimeout(context.Background(), time.Millisecond*250)
 	defer cancel()
 	sm, err := ctxMgr(t, artDetails, timeoutCtx)
+	assert.NoError(t, err)
 	time.Sleep(time.Millisecond * 300)
 	_, err = sm.GetVersion()
-	assert.Error(t, err)
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fail()
-	}
+	// Expect timeout error
+	assert.ErrorContains(t, err, context.DeadlineExceeded.Error())
 }

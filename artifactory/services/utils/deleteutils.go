@@ -2,22 +2,19 @@ package utils
 
 import (
 	"errors"
-	"regexp"
 	"strings"
 
 	"github.com/jfrog/jfrog-client-go/utils"
-	"github.com/jfrog/jfrog-client-go/utils/errorutils"
 	"github.com/jfrog/jfrog-client-go/utils/io/content"
 )
 
 func WildcardToDirsPath(deletePattern, searchResult string) (string, error) {
 	if !strings.HasSuffix(deletePattern, "/") {
-		return "", errors.New("Delete pattern must end with \"/\"")
+		return "", errors.New("delete pattern must end with \"/\"")
 	}
 
-	regexpPattern := "^" + strings.Replace(deletePattern, "*", "([^/]*|.*)", -1)
-	r, err := regexp.Compile(regexpPattern)
-	errorutils.CheckError(err)
+	regexpPattern := "^" + strings.ReplaceAll(deletePattern, "*", "([^/]*|.*)")
+	r, err := utils.GetRegExp(regexpPattern)
 	if err != nil {
 		return "", err
 	}
@@ -45,7 +42,9 @@ func WriteCandidateDirsToBeDeleted(candidateDirsReaders []*content.ContentReader
 	if err != nil {
 		return
 	}
-	defer dirsToBeDeletedReader.Close()
+	defer func() {
+		err = errors.Join(err, dirsToBeDeletedReader.Close())
+	}()
 	var candidateDirToBeDeletedPath string
 	var itemNotToBeDeletedLocation string
 	var candidateDirToBeDeleted, artifactNotToBeDeleted *ResultItem
@@ -59,7 +58,7 @@ func WriteCandidateDirsToBeDeleted(candidateDirsReaders []*content.ContentReader
 			if candidateDirToBeDeleted.Name == "." {
 				continue
 			}
-			candidateDirToBeDeletedPath = strings.ToLower(candidateDirToBeDeleted.GetItemRelativePath())
+			candidateDirToBeDeletedPath = candidateDirToBeDeleted.GetItemRelativePath()
 		}
 		// Fetch the next 'artifactNotToBeDelete'.
 		if artifactNotToBeDeleted == nil {
@@ -70,7 +69,7 @@ func WriteCandidateDirsToBeDeleted(candidateDirsReaders []*content.ContentReader
 				writeRemainCandidate(resultWriter, dirsToBeDeletedReader)
 				break
 			}
-			itemNotToBeDeletedLocation = strings.ToLower(artifactNotToBeDeleted.GetItemRelativeLocation())
+			itemNotToBeDeletedLocation = artifactNotToBeDeleted.GetItemRelativeLocation()
 		}
 		// Found an 'artifact not to be deleted' in 'dir to be deleted', therefore skip writing the dir to the result file.
 		if strings.HasPrefix(itemNotToBeDeletedLocation, candidateDirToBeDeletedPath) {
@@ -96,14 +95,14 @@ func writeRemainCandidate(cw *content.ContentWriter, mergeResult *content.Conten
 	}
 }
 
-func FilterCandidateToBeDeleted(deleteCandidates *content.ContentReader, resultWriter *content.ContentWriter, candidateType string) ([]*content.ContentReader, error) {
+func FilterCandidateToBeDeleted(deleteCandidates *content.ContentReader, resultWriter *content.ContentWriter, candidateType ResultItemType) ([]*content.ContentReader, error) {
 	paths := make(map[string]content.SortableContentItem)
 	pathsKeys := make([]string, 0, utils.MaxBufferSize)
 	toBeDeleted := []*content.ContentReader{}
 	for candidate := new(ResultItem); deleteCandidates.NextRecord(candidate) == nil; candidate = new(ResultItem) {
 		// Save all candidates, of the requested type, to a different temp file.
-		if candidate.Type == candidateType {
-			if candidateType == "folder" && candidate.Name == "." {
+		if candidate.Type == string(candidateType) {
+			if candidateType == Folder && candidate.Name == "." {
 				continue
 			}
 			pathsKeys = append(pathsKeys, candidate.GetItemRelativePath())

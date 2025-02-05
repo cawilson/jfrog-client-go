@@ -2,6 +2,7 @@ package services
 
 import (
 	"encoding/json"
+	"fmt"
 	buildinfo "github.com/jfrog/build-info-go/entities"
 	"net/http"
 
@@ -52,6 +53,13 @@ func (bis *BuildInfoService) GetBuildInfo(params BuildInfoParams) (pbi *buildinf
 	return utils.GetBuildInfo(params.BuildName, params.BuildNumber, params.ProjectKey, bis)
 }
 
+// Returns the build runs for the requested build info name.
+// If build info was not found (404), returns found=false (with error nil).
+// For any other response that isn't 200, an error is returned.
+func (bis *BuildInfoService) GetBuildRuns(params BuildInfoParams) (runs *buildinfo.BuildRuns, found bool, err error) {
+	return utils.GetBuildRuns(params.BuildName, params.ProjectKey, bis)
+}
+
 func (bis *BuildInfoService) PublishBuildInfo(build *buildinfo.BuildInfo, projectKey string) (*clientutils.Sha256Summary, error) {
 	summary := clientutils.NewSha256Summary()
 	content, err := json.Marshal(build)
@@ -61,17 +69,17 @@ func (bis *BuildInfoService) PublishBuildInfo(build *buildinfo.BuildInfo, projec
 	if bis.IsDryRun() {
 		log.Info("[Dry run] Logging Build info preview...")
 		log.Output(clientutils.IndentJson(content))
-		return summary, err
+		return summary, nil
 	}
 	httpClientsDetails := bis.GetArtifactoryDetails().CreateHttpClientDetails()
 	utils.SetContentType("application/vnd.org.jfrog.artifactory+json", &httpClientsDetails.Headers)
-	log.Info("Deploying build info...")
+	log.Info(fmt.Sprintf("Publishing build info for <%s>/<%s>...", build.Name, build.Number))
 	resp, body, err := bis.client.SendPut(bis.GetArtifactoryDetails().GetUrl()+"api/build"+utils.GetProjectQueryParam(projectKey), content, &httpClientsDetails)
 	if err != nil {
-		return summary, err
+		return summary, fmt.Errorf("error occurred while publishing build info: %s", err.Error())
 	}
-	if err = errorutils.CheckResponseStatus(resp, http.StatusOK, http.StatusCreated, http.StatusNoContent); err != nil {
-		return summary, errorutils.CheckError(errorutils.GenerateResponseError(resp.Status, clientutils.IndentJson(body)))
+	if err = errorutils.CheckResponseStatusWithBody(resp, body, http.StatusOK, http.StatusCreated, http.StatusNoContent); err != nil {
+		return summary, err
 	}
 	summary.SetSucceeded(true)
 	summary.SetSha256(resp.Header.Get("X-Checksum-Sha256"))

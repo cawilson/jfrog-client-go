@@ -6,12 +6,13 @@ import (
 	"strings"
 )
 
+// #nosec G101 -- False positive - no hardcoded credentials.
 const CredentialsInUrlRegexp = `(http|https|git)://.+@`
 
 func GetRegExp(regex string) (*regexp.Regexp, error) {
 	regExp, err := regexp.Compile(regex)
-	if errorutils.CheckError(err) != nil {
-		return nil, err
+	if err != nil {
+		return nil, errorutils.CheckErrorf("failed to compile regex '%s' : %w", regex, err)
 	}
 	return regExp, nil
 }

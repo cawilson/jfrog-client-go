@@ -2,13 +2,11 @@ package services
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
+	"net/url"
 
-	"github.com/jfrog/jfrog-client-go/artifactory/services/utils"
 	"github.com/jfrog/jfrog-client-go/auth"
 	"github.com/jfrog/jfrog-client-go/http/jfroghttpclient"
-	clientutils "github.com/jfrog/jfrog-client-go/utils"
 	"github.com/jfrog/jfrog-client-go/utils/errorutils"
 	"github.com/jfrog/jfrog-client-go/utils/log"
 )
@@ -24,11 +22,11 @@ func NewRepositoriesService(client *jfroghttpclient.JfrogHttpClient) *Repositori
 	return &RepositoriesService{client: client}
 }
 
-// Get fetches repository details from Artifactory using given repokey (name) into the given params struct.
+// Get fetches repository details from Artifactory using given repoKey (name) into the given params struct.
 // The function expects to get the repo key and a pointer to a param struct that will be filled up.
 // The param struct should contain the desired param's fields corresponded to the Artifactory REST API, such as RepositoryDetails, LocalRepositoryBaseParams, etc.
 func (rs *RepositoriesService) Get(repoKey string, repoDetails interface{}) error {
-	log.Info("Getting repository '" + repoKey + "' details ...")
+	log.Debug("Getting repository '" + repoKey + "' details ...")
 	body, err := rs.sendGet(apiRepositories + "/" + repoKey)
 	if err != nil {
 		return err
@@ -37,14 +35,22 @@ func (rs *RepositoriesService) Get(repoKey string, repoDetails interface{}) erro
 	return errorutils.CheckError(err)
 }
 
+func (rs *RepositoriesService) IsExists(repoKey string) (exists bool, err error) {
+	httpClientsDetails := rs.ArtDetails.CreateHttpClientDetails()
+	resp, _, _, err := rs.client.SendGet(rs.ArtDetails.GetUrl()+apiRepositories+"/"+repoKey, true, &httpClientsDetails)
+	if err != nil {
+		return false, errorutils.CheckError(err)
+	}
+	return resp.StatusCode == http.StatusOK, nil
+}
+
 func (rs *RepositoriesService) GetAll() (*[]RepositoryDetails, error) {
 	log.Info("Getting all repositories ...")
-	return rs.GetWithFilter(RepositoriesFilterParams{RepoType: "", PackageType: ""})
+	return rs.GetWithFilter(RepositoriesFilterParams{})
 }
 
 func (rs *RepositoriesService) GetWithFilter(params RepositoriesFilterParams) (*[]RepositoryDetails, error) {
-	url := fmt.Sprintf("%s?type=%s&packageType=%s", apiRepositories, params.RepoType, params.PackageType)
-	body, err := rs.sendGet(url)
+	body, err := rs.sendGet(rs.createUrlWithFilter(params))
 	if err != nil {
 		return nil, err
 	}
@@ -53,53 +59,59 @@ func (rs *RepositoriesService) GetWithFilter(params RepositoriesFilterParams) (*
 	return repoDetails, errorutils.CheckError(err)
 }
 
+// This function is used to create the URL for the repositories API with the given filter params.
+// The function expects to get a RepositoriesFilterParams struct that contains the desired filter params.
+// The function returns the URL string.
+func (rs *RepositoriesService) createUrlWithFilter(params RepositoriesFilterParams) string {
+	u := url.URL{
+		Path: apiRepositories,
+	}
+
+	queryParams := url.Values{}
+	if params.RepoType != "" {
+		queryParams.Add("type", params.RepoType)
+	}
+	if params.PackageType != "" {
+		queryParams.Add("packageType", params.PackageType)
+	}
+	if params.ProjectKey != "" {
+		queryParams.Add("project", params.ProjectKey)
+	}
+
+	u.RawQuery = queryParams.Encode()
+	return u.String()
+}
+
 func (rs *RepositoriesService) sendGet(api string) ([]byte, error) {
 	httpClientsDetails := rs.ArtDetails.CreateHttpClientDetails()
 	resp, body, _, err := rs.client.SendGet(rs.ArtDetails.GetUrl()+api, true, &httpClientsDetails)
 	if err != nil {
 		return nil, err
 	}
-	if err = errorutils.CheckResponseStatus(resp, http.StatusOK); err != nil {
-		return nil, errorutils.CheckError(errorutils.GenerateResponseError(resp.Status, clientutils.IndentJson(body)))
+	if err = errorutils.CheckResponseStatusWithBody(resp, body, http.StatusOK); err != nil {
+		return nil, err
 	}
 	log.Debug("Artifactory response:", resp.Status)
 	log.Debug("Done getting repository details.")
 	return body, nil
 }
 
-func (rs *RepositoriesService) CreateRemote(params RemoteRepositoryBaseParams) error {
-	return rs.createRepo(params, params.Key)
-}
-
-func (rs *RepositoriesService) CreateVirtual(params VirtualRepositoryBaseParams) error {
-	return rs.createRepo(params, params.Key)
-}
-
-func (rs *RepositoriesService) CreateLocal(params LocalRepositoryBaseParams) error {
-	return rs.createRepo(params, params.Key)
-}
-
-func (rs *RepositoriesService) CreateFederated(params FederatedRepositoryBaseParams) error {
-	return rs.createRepo(params, params.Key)
-}
-
-func (rs *RepositoriesService) createRepo(params interface{}, repoName string) error {
-	content, err := json.Marshal(params)
-	if errorutils.CheckError(err) != nil {
-		return err
+func (rs *RepositoriesService) Create(params interface{}, repoName string) error {
+	repositoryService := &RepositoryService{
+		ArtDetails: rs.ArtDetails,
+		client:     rs.client,
+		isUpdate:   false,
 	}
-	httpClientsDetails := rs.ArtDetails.CreateHttpClientDetails()
-	utils.SetContentType("application/json", &httpClientsDetails.Headers)
-	resp, body, err := rs.client.SendPut(rs.ArtDetails.GetUrl()+"api/repositories/"+repoName, content, &httpClientsDetails)
-	if err != nil {
-		return err
+	return repositoryService.performRequest(params, repoName)
+}
+
+func (rs *RepositoriesService) Update(params interface{}, repoName string) error {
+	repositoryService := &RepositoryService{
+		ArtDetails: rs.ArtDetails,
+		client:     rs.client,
+		isUpdate:   true,
 	}
-	if err = errorutils.CheckResponseStatus(resp, http.StatusOK); err != nil {
-		return errorutils.CheckError(errorutils.GenerateResponseError(resp.Status, clientutils.IndentJson(body)))
-	}
-	log.Debug("Artifactory response:", resp.Status)
-	log.Info(fmt.Sprintf("Repository %q created.", repoName))
-	return nil
+	return repositoryService.performRequest(params, repoName)
 }
 
 type RepositoryDetails struct {
@@ -123,6 +135,7 @@ func (rd RepositoryDetails) GetRepoType() string {
 type RepositoriesFilterParams struct {
 	RepoType    string
 	PackageType string
+	ProjectKey  string
 }
 
 func NewRepositoriesFilterParams() RepositoriesFilterParams {

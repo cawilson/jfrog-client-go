@@ -2,16 +2,13 @@ package services
 
 import (
 	"encoding/json"
-	"net/http"
-
-	artifactoryUtils "github.com/jfrog/jfrog-client-go/artifactory/services/utils"
 	"github.com/jfrog/jfrog-client-go/auth"
 	distributionServiceUtils "github.com/jfrog/jfrog-client-go/distribution/services/utils"
 	"github.com/jfrog/jfrog-client-go/http/jfroghttpclient"
 	"github.com/jfrog/jfrog-client-go/utils"
-	clientutils "github.com/jfrog/jfrog-client-go/utils"
 	"github.com/jfrog/jfrog-client-go/utils/errorutils"
 	"github.com/jfrog/jfrog-client-go/utils/log"
+	"net/http"
 )
 
 type CreateReleaseBundleService struct {
@@ -26,7 +23,7 @@ func (cb *CreateReleaseBundleService) GetDistDetails() auth.ServiceDetails {
 	return cb.DistDetails
 }
 
-func (cb *CreateReleaseBundleService) CreateReleaseBundle(createBundleParams CreateReleaseBundleParams) (*clientutils.Sha256Summary, error) {
+func (cb *CreateReleaseBundleService) CreateReleaseBundle(createBundleParams CreateReleaseBundleParams) (*utils.Sha256Summary, error) {
 	releaseBundleBody, err := distributionServiceUtils.CreateBundleBody(createBundleParams.ReleaseBundleParams, cb.DryRun)
 	if err != nil {
 		return nil, err
@@ -43,10 +40,10 @@ func (cb *CreateReleaseBundleService) CreateReleaseBundle(createBundleParams Cre
 
 // In case of an immediate sign- release bundle detailed summary (containing sha256) will be returned.
 // In other cases summary will be nil.
-func (cb *CreateReleaseBundleService) execCreateReleaseBundle(gpgPassphrase string, releaseBundle *createReleaseBundleBody) (*clientutils.Sha256Summary, error) {
-	var summary *clientutils.Sha256Summary = nil
-	if releaseBundle.SignImmediately {
-		summary = clientutils.NewSha256Summary()
+func (cb *CreateReleaseBundleService) execCreateReleaseBundle(gpgPassphrase string, releaseBundle *createReleaseBundleBody) (*utils.Sha256Summary, error) {
+	var summary *utils.Sha256Summary = nil
+	if *releaseBundle.SignImmediately {
+		summary = utils.NewSha256Summary()
 	}
 	httpClientsDetails := cb.DistDetails.CreateHttpClientDetails()
 	content, err := json.Marshal(releaseBundle)
@@ -61,7 +58,7 @@ func (cb *CreateReleaseBundleService) execCreateReleaseBundle(gpgPassphrase stri
 
 	url := cb.DistDetails.GetUrl() + "api/v1/release_bundle"
 	distributionServiceUtils.AddGpgPassphraseHeader(gpgPassphrase, &httpClientsDetails.Headers)
-	artifactoryUtils.SetContentType("application/json", &httpClientsDetails.Headers)
+	httpClientsDetails.SetContentTypeApplicationJson()
 	resp, body, err := cb.client.SendPost(url, content, &httpClientsDetails)
 	if err != nil {
 		return summary, err
@@ -74,7 +71,7 @@ func (cb *CreateReleaseBundleService) execCreateReleaseBundle(gpgPassphrase stri
 		summary.SetSha256(resp.Header.Get("X-Checksum-Sha256"))
 	}
 
-	log.Debug("Distribution response: ", resp.Status)
+	log.Debug("Distribution response:", resp.Status)
 	log.Debug(utils.IndentJson(body))
 	return summary, nil
 }

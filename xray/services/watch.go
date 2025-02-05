@@ -8,7 +8,6 @@ import (
 
 	"github.com/jfrog/jfrog-client-go/http/jfroghttpclient"
 
-	artUtils "github.com/jfrog/jfrog-client-go/artifactory/services/utils"
 	"github.com/jfrog/jfrog-client-go/auth"
 	clientutils "github.com/jfrog/jfrog-client-go/utils"
 	"github.com/jfrog/jfrog-client-go/utils/errorutils"
@@ -40,8 +39,8 @@ func NewWatchService(client *jfroghttpclient.JfrogHttpClient) *WatchService {
 }
 
 // GetXrayDetails returns the Xray details
-func (vs *WatchService) GetXrayDetails() auth.ServiceDetails {
-	return vs.XrayDetails
+func (xws *WatchService) GetXrayDetails() auth.ServiceDetails {
+	return xws.XrayDetails
 }
 
 // GetJfrogHttpClient returns the http client
@@ -55,6 +54,14 @@ func (xws *WatchService) getWatchURL() string {
 	return clientutils.AddTrailingSlashIfNeeded(xws.XrayDetails.GetUrl()) + watchAPIURL
 }
 
+func (xws *WatchService) getWatchUrlWithProjectKey(projectKey string) string {
+	baseUrl := xws.getWatchURL()
+	if projectKey == "" {
+		return baseUrl
+	}
+	return baseUrl + "?projectKey=" + projectKey
+}
+
 // Delete will delete an existing watch by name
 // It will error if no watch can be found by that name.
 func (xws *WatchService) Delete(watchName string) error {
@@ -64,8 +71,8 @@ func (xws *WatchService) Delete(watchName string) error {
 	if err != nil {
 		return err
 	}
-	if err = errorutils.CheckResponseStatus(resp, http.StatusOK); err != nil {
-		return errorutils.CheckError(errorutils.GenerateResponseError(resp.Status, clientutils.IndentJson(body)))
+	if err = errorutils.CheckResponseStatusWithBody(resp, body, http.StatusOK); err != nil {
+		return err
 	}
 
 	log.Debug("Xray response:", resp.Status)
@@ -86,22 +93,19 @@ func (xws *WatchService) Create(params utils.WatchParams) error {
 	}
 
 	httpClientsDetails := xws.XrayDetails.CreateHttpClientDetails()
-	artUtils.SetContentType("application/json", &httpClientsDetails.Headers)
-	var url = xws.getWatchURL()
-	var resp *http.Response
-	var respBody []byte
+	httpClientsDetails.SetContentTypeApplicationJson()
+	var url = xws.getWatchUrlWithProjectKey(params.ProjectKey)
 
 	log.Info(fmt.Sprintf("Creating a new Watch named %s on JFrog Xray....", params.Name))
-	resp, respBody, err = xws.client.SendPost(url, content, &httpClientsDetails)
+	resp, body, err := xws.client.SendPost(url, content, &httpClientsDetails)
 	if err != nil {
 		return err
 	}
-	if err = errorutils.CheckResponseStatus(resp, http.StatusOK, http.StatusCreated); err != nil {
-		err := errorutils.GenerateResponseError(resp.Status, clientutils.IndentJson(respBody))
+	if err = errorutils.CheckResponseStatusWithBody(resp, body, http.StatusOK, http.StatusCreated); err != nil {
 		if resp.StatusCode == http.StatusConflict {
-			return errorutils.CheckError(&WatchAlreadyExistsError{InnerError: err})
+			return &WatchAlreadyExistsError{InnerError: err}
 		}
-		return errorutils.CheckError(err)
+		return err
 	}
 	log.Debug("Xray response:", resp.Status)
 	log.Info("Done creating watch.")
@@ -131,19 +135,17 @@ func (xws *WatchService) Update(params utils.WatchParams) error {
 	}
 
 	httpClientsDetails := xws.XrayDetails.CreateHttpClientDetails()
-	artUtils.SetContentType("application/json", &httpClientsDetails.Headers)
+	httpClientsDetails.SetContentTypeApplicationJson()
 	var url = xws.getWatchURL() + "/" + params.Name
-	var resp *http.Response
-	var respBody []byte
 
 	log.Info("Updating watch...")
-	resp, respBody, err = xws.client.SendPut(url, content, &httpClientsDetails)
+	resp, body, err := xws.client.SendPut(url, content, &httpClientsDetails)
 
 	if err != nil {
 		return err
 	}
-	if err = errorutils.CheckResponseStatus(resp, http.StatusOK, http.StatusCreated); err != nil {
-		return errorutils.CheckError(errorutils.GenerateResponseError(resp.Status, clientutils.IndentJson(respBody)))
+	if err = errorutils.CheckResponseStatusWithBody(resp, body, http.StatusOK, http.StatusCreated); err != nil {
+		return err
 	}
 	log.Debug("Xray response:", resp.Status)
 	log.Info("Done updating watch.")
@@ -161,8 +163,8 @@ func (xws *WatchService) Get(watchName string) (watchResp *utils.WatchParams, er
 	if err != nil {
 		return &utils.WatchParams{}, err
 	}
-	if err = errorutils.CheckResponseStatus(resp, http.StatusOK); err != nil {
-		return &utils.WatchParams{}, errorutils.CheckError(errorutils.GenerateResponseError(resp.Status, clientutils.IndentJson(body)))
+	if err = errorutils.CheckResponseStatusWithBody(resp, body, http.StatusOK); err != nil {
+		return &utils.WatchParams{}, err
 	}
 	err = json.Unmarshal(body, &watch)
 

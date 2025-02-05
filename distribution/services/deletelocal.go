@@ -3,10 +3,8 @@ package services
 import (
 	"net/http"
 
-	artifactoryUtils "github.com/jfrog/jfrog-client-go/artifactory/services/utils"
 	"github.com/jfrog/jfrog-client-go/auth"
 	"github.com/jfrog/jfrog-client-go/http/jfroghttpclient"
-	clientutils "github.com/jfrog/jfrog-client-go/utils"
 	"github.com/jfrog/jfrog-client-go/utils/errorutils"
 	"github.com/jfrog/jfrog-client-go/utils/log"
 )
@@ -38,18 +36,21 @@ func (dlr *DeleteLocalReleaseBundleService) execDeleteLocalDistribution(name, ve
 	log.Info("Deleting release bundle:", name, version)
 	httpClientsDetails := dlr.DistDetails.CreateHttpClientDetails()
 	url := dlr.DistDetails.GetUrl() + "api/v1/release_bundle/" + name + "/" + version
-	artifactoryUtils.SetContentType("application/json", &httpClientsDetails.Headers)
+	httpClientsDetails.SetContentTypeApplicationJson()
 	resp, body, err := dlr.client.SendDelete(url, nil, &httpClientsDetails)
 	if err != nil {
 		return err
 	}
-	if err = errorutils.CheckResponseStatus(resp, http.StatusNoContent); err != nil {
-		return errorutils.CheckError(errorutils.GenerateResponseError(resp.Status, clientutils.IndentJson(body)))
+	if err = errorutils.CheckResponseStatusWithBody(resp, body, http.StatusNoContent); err != nil {
+		return err
 	}
 	if dlr.Sync {
-		dlr.waitForDeletion(name, version)
+		err := dlr.waitForDeletion(name, version)
+		if err != nil {
+			return err
+		}
 	}
 
-	log.Debug("Distribution response: ", resp.Status)
+	log.Debug("Distribution response:", resp.Status)
 	return errorutils.CheckError(err)
 }
