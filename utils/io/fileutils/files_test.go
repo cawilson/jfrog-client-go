@@ -3,15 +3,70 @@ package fileutils
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
 
+	biutils "github.com/jfrog/build-info-go/utils"
+	"github.com/jfrog/jfrog-client-go/utils/io"
+
 	"github.com/stretchr/testify/assert"
 )
 
+func TestIsPathExistsAndIsPathAccessible(t *testing.T) {
+	var symlinkPath string
+	symlinkCreated := false
+
+	// Create a temporary file
+	tempFile, err := os.CreateTemp("", "testfile")
+	assert.NoError(t, err)
+
+	// Close the file immediately after creation to ensure it is not locked
+	assert.NoError(t, tempFile.Close())
+
+	defer func() {
+		// Remove the symlink before removing the file it references.
+		if symlinkCreated {
+			assert.NoError(t, os.Remove(symlinkPath))
+		}
+		assert.NoError(t, os.Remove(tempFile.Name()))
+	}()
+
+	// Test for an existing file
+	assert.True(t, IsPathExists(tempFile.Name(), false))
+	assert.True(t, IsPathAccessible(tempFile.Name()))
+
+	// Test for a non-existing file
+	assert.False(t, IsPathExists(tempFile.Name()+"_nonexistent", false))
+
+	// Create a temporary directory
+	tempDir := t.TempDir()
+
+	// Test for an existing directory
+	assert.True(t, IsPathExists(tempDir, false))
+	assert.True(t, IsPathAccessible(tempDir))
+
+	// Test for a non-existing directory
+	assert.False(t, IsPathExists(tempDir+"_nonexistent", false))
+	assert.False(t, IsPathAccessible(tempDir+"_nonexistent"))
+
+	// Create a symlink and test with preserveSymLink true and false
+	symlinkPath = tempFile.Name() + "_symlink"
+	err = os.Symlink(tempFile.Name(), symlinkPath)
+	assert.NoError(t, err)
+	// It is best to remove the symlink before removing the file it
+	// references. We use this variable to flag to the defer function
+	// to remove the symlink.
+	symlinkCreated = true
+
+	assert.True(t, IsPathExists(symlinkPath, true))
+	assert.True(t, IsPathExists(symlinkPath, false))
+	assert.True(t, IsPathAccessible(symlinkPath))
+}
+
 func TestIsSsh(t *testing.T) {
-	tests := []struct {
+	testRuns := []struct {
 		url      string
 		expected bool
 	}{
@@ -23,7 +78,7 @@ func TestIsSsh(t *testing.T) {
 		{"sSh://some.url/some/api", true},
 		{"SSH://some.url/some/api", true},
 	}
-	for _, test := range tests {
+	for _, test := range testRuns {
 		t.Run(test.url, func(t *testing.T) {
 			assert.Equal(t, test.expected, IsSshUrl(test.url), "Wrong ssh for URL: "+test.url)
 		})
@@ -36,7 +91,9 @@ func TestFindUpstreamFile(t *testing.T) {
 		assert.Error(t, err)
 		return
 	}
-	defer os.Chdir(wd)
+	defer func() {
+		assert.NoError(t, os.Chdir(wd))
+	}()
 
 	// CD into a directory with a goDotMod.test file.
 	projectRoot := filepath.Join("testdata", "project")
@@ -69,8 +126,8 @@ func TestFindUpstreamFile(t *testing.T) {
 		return
 	}
 
-	// CD into a sub directory in the same project, and expect to get the same project root.
-	os.Chdir(wd)
+	// CD into a subdirectory in the same project, and expect to get the same project root.
+	assert.NoError(t, os.Chdir(wd))
 	projectSubDirectory := filepath.Join("testdata", "project", "dir")
 	err = os.Chdir(projectSubDirectory)
 	if err != nil {
@@ -118,10 +175,12 @@ func TestFindUpstreamFolder(t *testing.T) {
 		assert.Error(t, err)
 		return
 	}
-	defer os.Chdir(wd)
+	defer func() {
+		assert.NoError(t, os.Chdir(wd))
+	}()
 
 	// Create path to directory to find.
-	dirPath := filepath.Join("testdata")
+	dirPath := "testdata"
 	err = os.Chdir(dirPath)
 	if err != nil {
 		assert.Error(t, err)
@@ -218,7 +277,7 @@ func TestListFilesByFilterFunc(t *testing.T) {
 		ext := strings.TrimLeft(filepath.Ext(filePath), ".")
 		return regexp.MatchString(`.*proj$`, ext)
 	}
-	files, err := ListFilesByFilterFunc(testDir, filterFunc)
+	files, err := ListFilesWithFilterFunc(testDir, true, false, filterFunc)
 	if err != nil {
 		assert.NoError(t, err)
 		return
@@ -227,7 +286,7 @@ func TestListFilesByFilterFunc(t *testing.T) {
 }
 
 func TestGetFileAndDirFromPath(t *testing.T) {
-	tests := []struct {
+	testRuns := []struct {
 		path         string
 		expectedFile string
 		expectedDir  string
@@ -242,10 +301,104 @@ func TestGetFileAndDirFromPath(t *testing.T) {
 		{"\\c.in", "c.in", ""},
 		{"\\\\c.in", "c.in", ""},
 	}
-	for _, test := range tests {
+	for _, test := range testRuns {
 		File, Dir := GetFileAndDirFromPath(test.path)
 		assert.Equal(t, test.expectedFile, File, "Wrong file name for path: "+test.path)
 		assert.Equal(t, test.expectedDir, Dir, "Wrong dir for path: "+test.path)
 	}
+}
 
+func TestRemoveDirContents(t *testing.T) {
+	// Prepare the test environment in a temporary directory
+	tmpDirPath, err := CreateTempDir()
+	assert.NoError(t, err)
+	defer func() {
+		assert.NoError(t, RemoveTempDir(tmpDirPath))
+	}()
+	err = biutils.CopyDir(filepath.Join("testdata", "removedircontents"), tmpDirPath, true, nil)
+	assert.NoError(t, err)
+
+	// Run the function
+	dirToEmptyPath := filepath.Join(tmpDirPath, "dirtoempty")
+	err = RemoveDirContents(dirToEmptyPath)
+	assert.NoError(t, err)
+
+	// Assert the directories contents: dirtoempty should be empty and dirtoremain should contain one file.
+	emptyDirFiles, err := os.ReadDir(dirToEmptyPath)
+	assert.NoError(t, err)
+	assert.Empty(t, emptyDirFiles)
+	remainedDirPath := filepath.Join(tmpDirPath, "dirtoremain")
+	remainedDirFiles, err := os.ReadDir(remainedDirPath)
+	assert.NoError(t, err)
+	assert.Len(t, remainedDirFiles, 1)
+}
+
+func TestListFilesRecursiveWalkIntoDirSymlink(t *testing.T) {
+	if io.IsWindows() {
+		t.Skip("Running on windows, skipping...")
+	}
+
+	parentTempDir := createSymlinksTreeForTest(t)
+	expectedFileList := generateExpectedSymlinksFileList(parentTempDir)
+
+	// This directory and its subdirectories contain a symlink to a parent directory and a symlink to a sibling directory.
+	filesList, err := ListFilesRecursiveWalkIntoDirSymlink(parentTempDir, true)
+	assert.NoError(t, err)
+	assert.True(t, reflect.DeepEqual(expectedFileList, filesList))
+}
+
+// Creates the following tree structure in a temp directory, and returns its path:
+/*
+├── d1
+│	├── File_F1
+│	└── linkToParent -> ../
+└── d2
+	└── linkToD1 -> ../d1/
+*/
+func createSymlinksTreeForTest(t *testing.T) string {
+	parentTempDir := t.TempDir()
+
+	// Create the "d1" directory
+	d1Path := filepath.Join(parentTempDir, "d1")
+	assert.NoError(t, os.Mkdir(d1Path, 0755))
+
+	// Create "File_F1" inside "d1"
+	fileF1, err := os.Create(filepath.Join(d1Path, "File_F1"))
+	assert.NoError(t, err)
+	assert.NoError(t, fileF1.Close())
+
+	// Create symlink "linkToParent" in "d1" pointing to the parent temp directory
+	linkToParentPath := filepath.Join(d1Path, "linkToParent")
+	assert.NoError(t, os.Symlink(parentTempDir, linkToParentPath))
+
+	// Create the "d2" directory
+	d2Path := filepath.Join(parentTempDir, "d2")
+	assert.NoError(t, os.Mkdir(d2Path, 0755))
+
+	// Create symlink "linkToD1" in "d2" pointing to the "d1" directory
+	d1LinkPath := filepath.Join(d2Path, "linkToD1")
+	assert.NoError(t, os.Symlink(d1Path, d1LinkPath))
+
+	return parentTempDir
+}
+
+// Generates the expected output of file list based on the provided parent dir.
+func generateExpectedSymlinksFileList(parentDir string) []string {
+	expectedFileList := []string{
+		"",
+		"/d1",
+		"/d1/File_F1",
+		"/d1/linkToParent",
+		"/d1/linkToParent/d1",
+		"/d1/linkToParent/d1/File_F1",
+		"/d1/linkToParent/d2",
+		"/d1/linkToParent/d2/linkToD1",
+		"/d1/linkToParent/d2/linkToD1/File_F1",
+		"/d2",
+	}
+
+	for i, filePath := range expectedFileList {
+		expectedFileList[i] = parentDir + filePath
+	}
+	return expectedFileList
 }

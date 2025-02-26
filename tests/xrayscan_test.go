@@ -14,7 +14,7 @@ var testsXrayScanService *services.XrayScanService
 
 func TestNewXrayScanService(t *testing.T) {
 	initXrayTest(t)
-	xrayServerPort := xray.StartXrayMockServer()
+	xrayServerPort := xray.StartXrayMockServer(t)
 	artDetails := GetRtDetails()
 	client, err := jfroghttpclient.JfrogClientBuilder().
 		SetClientCertPath(artDetails.GetClientCertPath()).
@@ -55,8 +55,8 @@ func scanBuild(t *testing.T, buildName, buildNumber, expected string) {
 		t.Error(err)
 	}
 
-	expected = strings.Replace(expected, "\n", "", -1)
+	expected = strings.ReplaceAll(expected, "\n", "")
 	if string(result) != expected {
-		t.Error("Expected:", string(result), "Got: ", expected)
+		t.Error("Expected:", expected, "Got: ", string(result))
 	}
 }

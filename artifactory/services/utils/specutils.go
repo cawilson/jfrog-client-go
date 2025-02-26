@@ -18,8 +18,14 @@ type Aql struct {
 	ItemsFind string `json:"items.find"`
 }
 
+type PathMapping struct {
+	Input  string `json:"input"`
+	Output string `json:"output"`
+}
+
 type CommonParams struct {
 	Aql              Aql
+	PathMapping      PathMapping
 	Pattern          string
 	Exclusions       []string
 	Target           string
@@ -41,30 +47,7 @@ type CommonParams struct {
 	Ant              bool
 	ArchiveEntries   string
 	Transitive       bool
-}
-
-type FileGetter interface {
-	GetAql() Aql
-	GetPattern() string
-	SetPattern(pattern string)
-	GetExclusions() []string
-	GetTarget() string
-	SetTarget(target string)
-	IsExplode() bool
-	GetProps() string
-	GetSortOrder() string
-	GetSortBy() []string
-	GetOffset() int
-	GetLimit() int
-	GetBuild() string
-	GetProject() string
-	GetBundle() string
-	GetSpecType() (specType SpecType)
-	IsRecursive() bool
-	IsIncludeDirs() bool
-	GetArchiveEntries() string
-	SetArchiveEntries(archiveEntries string)
-	GetPatternType() clientutils.PatternType
+	Include          []string
 }
 
 func (params CommonParams) GetArchiveEntries() string {
@@ -101,10 +84,6 @@ func (params *CommonParams) GetTargetProps() *Properties {
 
 func (params *CommonParams) GetExcludeProps() string {
 	return params.ExcludeProps
-}
-
-func (params *CommonParams) IsExplode() bool {
-	return params.Recursive
 }
 
 func (params *CommonParams) IsRecursive() bool {

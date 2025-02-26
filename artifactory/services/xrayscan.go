@@ -35,9 +35,10 @@ func NewXrayScanService(client *jfroghttpclient.JfrogHttpClient) *XrayScanServic
 	return &XrayScanService{client: client}
 }
 
+// Deprecated legacy scan build. The new build scan command is in "/xray/commands/scan/buildscan"
 func (ps *XrayScanService) ScanBuild(scanParams XrayScanParams) ([]byte, error) {
 	url := ps.ArtDetails.GetUrl()
-	requestFullUrl, err := utils.BuildArtifactoryUrl(url, apiUri, make(map[string]string))
+	requestFullUrl, err := clientutils.BuildUrl(url, apiUri, make(map[string]string))
 	if err != nil {
 		return []byte{}, err
 	}
@@ -105,7 +106,7 @@ func checkForXrayResponseError(content []byte, ignoreFatalError bool) error {
 
 func (ps *XrayScanService) execScanRequest(url string, content []byte) (*http.Response, error) {
 	httpClientsDetails := ps.ArtDetails.CreateHttpClientDetails()
-	utils.SetContentType("application/json", &httpClientsDetails.Headers)
+	httpClientsDetails.SetContentTypeApplicationJson()
 
 	// The scan build operation can take a long time to finish.
 	// To keep the connection open, when Xray starts scanning the build, it starts sending new-lines
@@ -115,15 +116,11 @@ func (ps *XrayScanService) execScanRequest(url string, content []byte) (*http.Re
 	// as soon as Xray sends them.
 	utils.DisableAccelBuffering(&httpClientsDetails.Headers)
 
-	resp, _, _, err := ps.client.Send("POST", url, content, true, false, &httpClientsDetails, "")
+	resp, body, _, err := ps.client.Send("POST", url, content, true, false, &httpClientsDetails, "")
 	if err != nil {
 		return resp, err
 	}
-
-	if resp.StatusCode != http.StatusOK {
-		err = errorutils.CheckErrorf("Server response: " + resp.Status)
-	}
-	return resp, err
+	return resp, errorutils.CheckResponseStatusWithBody(resp, body, http.StatusOK)
 }
 
 type errorResponse struct {

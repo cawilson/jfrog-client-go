@@ -1,3 +1,4 @@
+//nolint:forcetypeassert
 package utils
 
 import (
@@ -21,6 +22,8 @@ const (
 	WatchRepositoriesAll WatchRepositoriesType = "all"
 	// WatchRepositoriesByName is the option where repositories are selected by name to be watched
 	WatchRepositoriesByName WatchRepositoriesType = "byname"
+
+	WatchGitRepository = "gitRepository"
 )
 
 // WatchBuildType defines the type of filter for a builds on a watch
@@ -56,10 +59,13 @@ type WatchParams struct {
 	Description string
 	Active      bool
 
-	Repositories WatchRepositoriesParams
+	Repositories    WatchRepositoriesParams
+	GitRepositories WatchGitRepositoryParams
+	Builds          WatchBuildsParams
 
-	Builds   WatchBuildsParams
 	Policies []AssignedPolicy
+
+	ProjectKey string
 }
 
 // WatchRepositoriesParams is a struct that stores the repository configuration for watch
@@ -73,6 +79,10 @@ type WatchRepositoriesParams struct {
 // WatchRepositoryAll is used to define the parameters when a watch uses all repositories
 type WatchRepositoryAll struct {
 	Filters watchFilters
+}
+
+type WatchGitRepositoryParams struct {
+	Resources []string
 }
 
 // WatchRepository is used to define a specific repository in a watch
@@ -160,6 +170,11 @@ type watchFilterPropertyValue struct {
 	Value string `json:"value"`
 }
 
+type ResourcesWatchesBody struct {
+	GitRepositoryWatches []string `json:"git_repository_watches,omitempty"`
+	ProjectWatches       []string `json:"project_watches,omitempty"`
+}
+
 // CreateBody creates a payload to configure a Watch in Xray
 // This can configure repositories and builds
 // However, bundles are not supported.
@@ -186,7 +201,20 @@ func CreateBody(params WatchParams) (*WatchBody, error) {
 		return nil, err
 	}
 
+	configureGitRepositories(&payloadBody, params)
+
 	return &payloadBody, nil
+}
+
+func configureGitRepositories(payloadBody *WatchBody, params WatchParams) {
+	for _, gitRepoResource := range params.GitRepositories.Resources {
+		gitRepo := watchProjectResourcesElement{
+			Type:     WatchGitRepository,
+			BinMgrID: "default",
+			Name:     gitRepoResource,
+		}
+		payloadBody.ProjectResources.Resources = append(payloadBody.ProjectResources.Resources, gitRepo)
+	}
 }
 
 func configureRepositories(payloadBody *WatchBody, params WatchParams) error {
@@ -221,7 +249,7 @@ func configureRepositories(payloadBody *WatchBody, params WatchParams) error {
 	case "":
 		// Empty is fine
 	default:
-		return errorutils.CheckErrorf("Invalid Repository Type. Must be " + string(WatchRepositoriesAll) + " or " + string(WatchRepositoriesByName))
+		return errorutils.CheckErrorf("invalid Repository Type. Must be " + string(WatchRepositoriesAll) + " or " + string(WatchRepositoriesByName))
 	}
 
 	return nil
@@ -323,7 +351,7 @@ func configureBuilds(payloadBody *WatchBody, params WatchParams) error {
 	case "":
 		// Empty is fine
 	default:
-		return errorutils.CheckErrorf("Invalid Build Type. Must be " + string(WatchBuildAll) + " or " + string(WatchBuildByName))
+		return errorutils.CheckErrorf("invalid Build Type. Must be " + string(WatchBuildAll) + " or " + string(WatchBuildByName))
 	}
 
 	return nil

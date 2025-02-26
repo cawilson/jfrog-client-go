@@ -3,6 +3,7 @@ package content
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -22,7 +23,7 @@ const (
 
 // Write a JSON file in small chunks. Only a single JSON key can be written to the file, and array as its value.
 // The array's values could be any JSON value types (number, string, etc...).
-// Once the first 'Write" call is made, the file will stay open, waiting for the next struct to be written (thread-safe).
+// Once the first 'Write' call is made, the file will stay open, waiting for the next struct to be written (thread-safe).
 // Finally, 'Close' will fill the end of the JSON file and the operation will be completed.
 type ContentWriter struct {
 	// arrayKey = JSON object key to be written.
@@ -106,7 +107,11 @@ func (rw *ContentWriter) startWritingWorker() {
 func (rw *ContentWriter) run() {
 	var err error
 	if !rw.useStdout {
-		defer rw.outputFile.Close()
+		defer func() {
+			if err = errors.Join(err, rw.outputFile.Sync(), rw.outputFile.Close()); err != nil {
+				rw.errorsQueue.AddError(errorutils.CheckError(err))
+			}
+		}()
 	}
 	openString := jsonArrayPrefixPattern
 	closeString := ""
@@ -130,8 +135,8 @@ func (rw *ContentWriter) run() {
 			rw.errorsQueue.AddError(errorutils.CheckError(err))
 			continue
 		}
-		record := recordPrefix + string(bytes.TrimRight(buf.Bytes(), "\n"))
-		_, err = rw.outputFile.WriteString(record)
+		recordString := recordPrefix + string(bytes.TrimRight(buf.Bytes(), "\n"))
+		_, err = rw.outputFile.WriteString(recordString)
 		if err != nil {
 			rw.errorsQueue.AddError(errorutils.CheckError(err))
 			continue
@@ -144,7 +149,7 @@ func (rw *ContentWriter) run() {
 			firstRecord = false
 		}
 	}
-	closeString = closeString + jsonArraySuffix
+	closeString += jsonArraySuffix
 	if rw.isCompleteFile {
 		closeString += "}\n"
 	}
@@ -152,7 +157,6 @@ func (rw *ContentWriter) run() {
 	if err != nil {
 		rw.errorsQueue.AddError(errorutils.CheckError(err))
 	}
-	return
 }
 
 // Finish writing to the file.

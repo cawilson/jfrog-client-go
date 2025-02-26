@@ -2,14 +2,15 @@ package utils
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
-	buildinfo "github.com/jfrog/build-info-go/entities"
 	"io"
 	"net/http"
-	"net/url"
 	"path"
 	"strings"
 	"sync"
+
+	buildinfo "github.com/jfrog/build-info-go/entities"
 
 	"github.com/jfrog/jfrog-client-go/auth"
 	"github.com/jfrog/jfrog-client-go/http/jfroghttpclient"
@@ -25,10 +26,11 @@ import (
 const (
 	ArtifactorySymlink           = "symlink.dest"
 	SymlinkSha1                  = "symlink.destsha1"
-	latest                       = "LATEST"
+	LatestBuildNumberKey         = "LATEST"
 	lastRelease                  = "LAST_RELEASE"
 	buildRepositoriesSuffix      = "-build-info"
 	defaultBuildRepositoriesName = "artifactory"
+	defaultProjectKey            = "default"
 )
 
 func UploadFile(localPath, url, logMsgPrefix string, artifactoryDetails *auth.ServiceDetails, details *fileutils.FileDetails,
@@ -66,6 +68,12 @@ func AddChecksumHeaders(headers map[string]string, fileDetails *fileutils.FileDe
 	}
 }
 
+// Add the checksum token header to the headers map.
+// This header enables Artifactory to accept the Checksum Deployment of a file uploaded via multipart upload.
+func AddChecksumTokenHeader(headers map[string]string, checksumToken string) {
+	AddHeader("X-Checksum-Deploy-Token", checksumToken, &headers)
+}
+
 func AddAuthHeaders(headers map[string]string, artifactoryDetails auth.ServiceDetails) {
 	if headers == nil {
 		headers = make(map[string]string)
@@ -83,31 +91,15 @@ func DisableAccelBuffering(headers *map[string]string) {
 	AddHeader("X-Accel-Buffering", "no", headers)
 }
 
+func AddSigningKeyNameHeader(keyName string, headers *map[string]string) {
+	AddHeader("X-JFrog-Signing-Key-Name", keyName, headers)
+}
+
 func AddHeader(headerName, headerValue string, headers *map[string]string) {
 	if *headers == nil {
 		*headers = make(map[string]string)
 	}
 	(*headers)[headerName] = headerValue
-}
-
-// Builds a URL for Artifactory requests.
-// Pay attention: semicolons are escaped!
-func BuildArtifactoryUrl(baseUrl, path string, params map[string]string) (string, error) {
-	u := url.URL{Path: path}
-	parsedUrl, err := url.Parse(baseUrl + u.String())
-	err = errorutils.CheckError(err)
-	if err != nil {
-		return "", err
-	}
-	q := parsedUrl.Query()
-	for k, v := range params {
-		q.Set(k, v)
-	}
-	parsedUrl.RawQuery = q.Encode()
-
-	// Semicolons are reserved as separators in some Artifactory APIs, so they'd better be encoded when used for other purposes
-	encodedUrl := strings.Replace(parsedUrl.String(), ";", url.QueryEscape(";"), -1)
-	return encodedUrl, nil
 }
 
 func IsWildcardPattern(pattern string) bool {
@@ -122,7 +114,7 @@ func GetProjectQueryParam(projectKey string) string {
 }
 
 // paths - Sorted array.
-// index - Index of the current path which we want to check if it a prefix of any of the other previous paths.
+// index - Index of the current path which we want to check if it is a prefix of any of the other previous paths.
 // separator - File separator.
 // Returns true paths[index] is a prefix of any of the paths[i] where i<index, otherwise returns false.
 func IsSubPath(paths []string, index int, separator string) bool {
@@ -138,11 +130,22 @@ func IsSubPath(paths []string, index int, separator string) bool {
 	return false
 }
 
+// Returns true if one or more paths has a value of 'prefix' as a prefix
+func HasPrefix(paths []string, prefix string) bool {
+	for i := 0; i < len(paths); i++ {
+		if strings.HasPrefix(paths[i], prefix) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // This method parses buildIdentifier. buildIdentifier should be from the format "buildName/buildNumber".
 // If no buildNumber provided LATEST will be downloaded.
 // If buildName or buildNumber contains "/" (slash) it should be escaped by "\" (backslash).
 // Result examples of parsing: "aaa/123" > "aaa"-"123", "aaa" > "aaa"-"LATEST", "aaa\\/aaa" > "aaa/aaa"-"LATEST",  "aaa/12\\/3" > "aaa"-"12/3".
-func getBuildNameAndNumberFromBuildIdentifier(buildIdentifier, projectKey string, flags CommonConf) (string, string, error) {
+func GetBuildNameAndNumberFromBuildIdentifier(buildIdentifier, projectKey string, flags CommonConf) (string, string, error) {
 	buildName, buildNumber, err := ParseNameAndVersion(buildIdentifier, true)
 	if err != nil {
 		return "", "", err
@@ -151,8 +154,16 @@ func getBuildNameAndNumberFromBuildIdentifier(buildIdentifier, projectKey string
 }
 
 func GetBuildNameAndNumberFromArtifactory(buildName, buildNumber, projectKey string, flags CommonConf) (string, string, error) {
-	if buildNumber == latest || buildNumber == lastRelease {
-		return getLatestBuildNumberFromArtifactory(buildName, buildNumber, projectKey, flags)
+	if buildNumber == LatestBuildNumberKey || buildNumber == lastRelease {
+		foundBuildNumber, err := GetLatestBuildNumberFromArtifactory(buildName, projectKey, flags)
+		if err != nil {
+			return "", "", err
+		}
+		if foundBuildNumber == "" {
+			log.Debug(fmt.Sprintf("A build-name: <%s> with a build-number: <%s> could not be found in Artifactory.", buildName, buildNumber))
+			return "", "", nil
+		}
+		return buildName, foundBuildNumber, nil
 	}
 	return buildName, buildNumber, nil
 }
@@ -183,10 +194,10 @@ func ParseNameAndVersion(identifier string, useLatestPolicy bool) (string, strin
 	}
 	if !strings.Contains(identifier, Delimiter) {
 		if useLatestPolicy {
-			log.Debug("No '" + Delimiter + "' is found in the build, build number is set to " + latest)
-			return identifier, latest, nil
+			log.Debug("No '" + Delimiter + "' is found in the build, build number is set to " + LatestBuildNumberKey)
+			return identifier, LatestBuildNumberKey, nil
 		} else {
-			return "", "", errorutils.CheckErrorf("No '" + Delimiter + "' is found in '" + identifier + "'")
+			return "", "", errorutils.CheckErrorf("no '" + Delimiter + "' is found in '" + identifier + "'")
 		}
 	}
 	name, version := "", ""
@@ -194,7 +205,7 @@ func ParseNameAndVersion(identifier string, useLatestPolicy bool) (string, strin
 	identifiers := strings.Split(identifier, Delimiter)
 	// The delimiter must not be prefixed with escapeChar (if it is, it should be part of the version)
 	// the code below gets substring from before the last delimiter.
-	// If the new string ends with escape char it means the last delimiter was part of the version and we need
+	// If the new string ends with escape char it means the last delimiter was part of the version, and we need
 	// to go back to the previous delimiter.
 	// If no proper delimiter was found the full string will be the name.
 	for i := len(identifiers) - 1; i >= 1; i-- {
@@ -207,16 +218,16 @@ func ParseNameAndVersion(identifier string, useLatestPolicy bool) (string, strin
 	}
 	if name == "" {
 		if useLatestPolicy {
-			log.Debug("No delimiter char (" + Delimiter + ") without escaping char was found in the build, build number is set to " + latest)
+			log.Debug("No delimiter char (" + Delimiter + ") without escaping char was found in the build, build number is set to " + LatestBuildNumberKey)
 			name = identifier
-			version = latest
+			version = LatestBuildNumberKey
 		} else {
-			return "", "", errorutils.CheckErrorf("No delimiter char (" + Delimiter + ") without escaping char was found in '" + identifier + "'")
+			return "", "", errorutils.CheckErrorf("no delimiter char (" + Delimiter + ") without escaping char was found in '" + identifier + "'")
 		}
 	}
 	// Remove escape chars.
-	name = strings.Replace(name, "\\/", "/", -1)
-	version = strings.Replace(version, "\\/", "/", -1)
+	name = strings.ReplaceAll(name, "\\/", "/")
+	version = strings.ReplaceAll(version, "\\/", "/")
 	return name, version, nil
 }
 
@@ -225,34 +236,31 @@ type Build struct {
 	BuildNumber string `json:"buildNumber"`
 }
 
-func getLatestBuildNumberFromArtifactory(buildName, buildNumber, projectKey string, flags CommonConf) (string, string, error) {
-	buildRepo := defaultBuildRepositoriesName
-	if projectKey != "" {
-		buildRepo = projectKey
-	}
-	buildRepo += buildRepositoriesSuffix
+func GetLatestBuildNumberFromArtifactory(buildName, projectKey string, flags CommonConf) (buildNumber string, err error) {
+	buildRepo := GetBuildInfoRepositoryByProject(projectKey)
 	aqlBody := CreateAqlQueryForLatestCreated(buildRepo, buildName)
 	reader, err := aqlSearch(aqlBody, flags)
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
-	defer reader.Close()
+	defer func() {
+		err = errors.Join(err, reader.Close())
+	}()
 	for resultItem := new(ResultItem); reader.NextRecord(resultItem) == nil; resultItem = new(ResultItem) {
 		if i := strings.LastIndex(resultItem.Name, "-"); i != -1 {
 			// Remove the timestamp and .json to get the build number
-			buildNumber = resultItem.Name[:i]
-			return buildName, buildNumber, nil
+			return resultItem.Name[:i], nil
 		}
 	}
-	log.Debug(fmt.Sprintf("The %s/%s build run could not be found in Artifactory.", buildName, buildNumber))
-	return "", "", err
+	return "", nil
 }
 
-func createBodyForLatestBuildRequest(buildName, buildNumber string) (body []byte, err error) {
-	buildJsonArray := []Build{{buildName, buildNumber}}
-	body, err = json.Marshal(buildJsonArray)
-	err = errorutils.CheckError(err)
-	return
+func GetBuildInfoRepositoryByProject(projectKey string) string {
+	buildRepo := defaultBuildRepositoriesName
+	if projectKey != "" && projectKey != defaultProjectKey {
+		buildRepo = projectKey
+	}
+	return buildRepo + buildRepositoriesSuffix
 }
 
 func filterAqlSearchResultsByBuild(specFile *CommonParams, reader *content.ContentReader, flags CommonConf, itemsAlreadyContainProperties bool) (*content.ContentReader, error) {
@@ -263,9 +271,13 @@ func filterAqlSearchResultsByBuild(specFile *CommonParams, reader *content.Conte
 	var wg sync.WaitGroup
 	wg.Add(2)
 	// If 'build-number' is missing in spec file, we fetch the latest from artifactory.
-	buildName, buildNumber, err := getBuildNameAndNumberFromBuildIdentifier(specFile.Build, specFile.Project, flags)
+	buildName, buildNumber, err := GetBuildNameAndNumberFromBuildIdentifier(specFile.Build, specFile.Project, flags)
 	if err != nil {
 		return nil, err
+	}
+	if buildName == "" {
+		// If build was not found, return an empty reader to filter out all artifacts
+		return content.NewEmptyContentReader(content.DefaultKey), nil
 	}
 
 	aggregatedBuilds, err := getAggregatedBuilds(buildName, buildNumber, specFile.Project, flags)
@@ -367,7 +379,7 @@ func loadMissingProperties(reader *content.ContentReader, readerWithProps *conte
 		return nil, err
 	}
 	reader.Reset()
-	if err := updateProps(readerWithProps, resultFile, buffer, writeOrder); err != nil {
+	if err = updateProps(readerWithProps, resultFile, buffer, writeOrder); err != nil {
 		return nil, err
 	}
 	return content.NewContentReader(resultFile.GetFilePath(), content.DefaultKey), nil
@@ -375,7 +387,7 @@ func loadMissingProperties(reader *content.ContentReader, readerWithProps *conte
 
 // Load the properties from readerWithProps into buffer's ResultItem and write its values into the resultWriter.
 // buffer - Search result buffer Key -> relative path, value -> ResultItem. We use this to load the props into the item by matching the uniqueness of relevant path.
-// crWithProps - File containing all the results with proprties.
+// crWithProps - File containing all the results with properties.
 // writeOrder - List of sorted buffer's searchResults(Map is an unordered collection).
 // resultWriter - Search results (sorted) with props.
 func updateProps(readerWithProps *content.ContentReader, resultWriter *content.ContentWriter, buffer map[string]*ResultItem, writeOrder []*ResultItem) error {
@@ -401,13 +413,15 @@ func updateProps(readerWithProps *content.ContentReader, resultWriter *content.C
 
 // Run AQL to retrieve artifacts or dependencies which are associated with a specific build.
 // Return a map of the items' SHA1.
-func fetchBuildArtifactsOrDependenciesSha1(flags CommonConf, artifacts bool, builds []Build) (map[string]int, error) {
+func fetchBuildArtifactsOrDependenciesSha1(flags CommonConf, artifacts bool, builds []Build) (buildArtifactsSha1 map[string]int, err error) {
 	buildQuery := createAqlQueryForBuild(buildIncludeQueryPart([]string{"name", "repo", "path", "actual_sha1"}), artifacts, builds)
 	reader, err := aqlSearch(buildQuery, flags)
 	if err != nil {
 		return nil, err
 	}
-	defer reader.Close()
+	defer func() {
+		err = errors.Join(err, reader.Close())
+	}()
 	return extractSha1FromAqlResponse(reader)
 }
 
@@ -478,7 +492,7 @@ func filterBuildAqlSearchResults(reader *content.ContentReader, buildArtifactsSh
 		return nil, err
 	}
 	reader.Reset()
-	var priorityLevel int = 0
+	var priorityLevel = 0
 	// Step 2 - Append the files to the final results file.
 	// Scan each priority artifacts and apply them to the final result, skip results that have been already written, by higher priority.
 	for _, priority := range priorityArray {
@@ -544,23 +558,56 @@ func createPrioritiesFiles() ([]*content.ContentWriter, error) {
 func GetBuildInfo(buildName, buildNumber, projectKey string, flags CommonConf) (pbi *buildinfo.PublishedBuildInfo, found bool, err error) {
 	// Resolve LATEST build number from Artifactory if required.
 	name, number, err := GetBuildNameAndNumberFromArtifactory(buildName, buildNumber, projectKey, flags)
-	if err != nil {
+	if err != nil || name == "" {
 		return nil, false, err
 	}
 
-	// Get build-info json from Artifactory.
-	httpClientsDetails := flags.GetArtifactoryDetails().CreateHttpClientDetails()
 	restApi := path.Join("api/build/", name, number)
+	body, found, err := sendGetBuildInfo(restApi, projectKey, flags)
+	if err != nil || !found {
+		return nil, found, err
+	}
+
+	// Build BuildInfo struct from json.
+	publishedBuildInfo := &buildinfo.PublishedBuildInfo{}
+	if err = json.Unmarshal(body, publishedBuildInfo); err != nil {
+		return nil, true, err
+	}
+
+	return publishedBuildInfo, true, nil
+}
+
+func GetBuildRuns(buildName, projectKey string, flags CommonConf) (runs *buildinfo.BuildRuns, found bool, err error) {
+	restApi := path.Join("api/build/", buildName)
+	body, found, err := sendGetBuildInfo(restApi, projectKey, flags)
+	if err != nil || !found {
+		return nil, found, err
+	}
+
+	buildRuns := &buildinfo.BuildRuns{}
+	if err = json.Unmarshal(body, buildRuns); err != nil {
+		return nil, true, err
+	}
+
+	return buildRuns, true, nil
+}
+
+func sendGetBuildInfo(restApi, projectKey string, flags CommonConf) (body []byte, found bool, err error) {
+	httpClientsDetails := flags.GetArtifactoryDetails().CreateHttpClientDetails()
 
 	queryParams := make(map[string]string)
 	if projectKey != "" {
 		queryParams["project"] = projectKey
 	}
 
-	requestFullUrl, err := BuildArtifactoryUrl(flags.GetArtifactoryDetails().GetUrl(), restApi, queryParams)
+	requestFullUrl, err := utils.BuildUrl(flags.GetArtifactoryDetails().GetUrl(), restApi, queryParams)
+	if err != nil {
+		return nil, false, err
+	}
 
 	httpClient := flags.GetJfrogHttpClient()
-	log.Debug("Getting build-info from: ", requestFullUrl)
+	log.Debug("Getting build-info from:", requestFullUrl)
+
 	resp, body, _, err := httpClient.SendGet(requestFullUrl, true, &httpClientsDetails)
 	if err != nil {
 		return nil, false, err
@@ -569,17 +616,10 @@ func GetBuildInfo(buildName, buildNumber, projectKey string, flags CommonConf) (
 		log.Debug("Artifactory response: " + resp.Status + "\n" + utils.IndentJson(body))
 		return nil, false, nil
 	}
-	if err = errorutils.CheckResponseStatus(resp, http.StatusOK); err != nil {
-		return nil, false, errorutils.CheckError(errorutils.GenerateResponseError(resp.Status, utils.IndentJson(body)))
+	if err = errorutils.CheckResponseStatusWithBody(resp, body, http.StatusOK); err != nil {
+		return nil, false, err
 	}
-
-	// Build BuildInfo struct from json.
-	publishedBuildInfo := &buildinfo.PublishedBuildInfo{}
-	if err := json.Unmarshal(body, publishedBuildInfo); err != nil {
-		return nil, true, err
-	}
-
-	return publishedBuildInfo, true, nil
+	return body, true, nil
 }
 
 // Recursively, aggregate all transitive builds of the input buildName and buildNumber.
@@ -619,7 +659,6 @@ type CommonConf interface {
 type CommonConfImpl struct {
 	client     *jfroghttpclient.JfrogHttpClient
 	artDetails *auth.ServiceDetails
-	version    string
 }
 
 func NewCommonConfImpl(artDetails auth.ServiceDetails) (CommonConf, error) {

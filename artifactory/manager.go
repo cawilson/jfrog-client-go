@@ -1,8 +1,11 @@
 package artifactory
 
 import (
-	buildinfo "github.com/jfrog/build-info-go/entities"
 	"io"
+
+	"github.com/jfrog/jfrog-client-go/auth"
+
+	buildinfo "github.com/jfrog/build-info-go/entities"
 
 	"github.com/jfrog/jfrog-client-go/artifactory/services"
 	_go "github.com/jfrog/jfrog-client-go/artifactory/services/go"
@@ -30,18 +33,7 @@ func NewWithProgress(config config.Config, progress ioutils.ProgressMgr) (Artifa
 	if err != nil {
 		return nil, err
 	}
-	client, err := jfroghttpclient.JfrogClientBuilder().
-		SetCertificatesPath(config.GetCertificatesPath()).
-		SetInsecureTls(config.IsInsecureTls()).
-		SetContext(config.GetContext()).
-		SetTimeout(config.GetHttpTimeout()).
-		SetClientCertPath(artDetails.GetClientCertPath()).
-		SetClientCertKeyPath(artDetails.GetClientCertKeyPath()).
-		AppendPreRequestInterceptor(artDetails.RunPreRequestFunctions).
-		SetContext(config.GetContext()).
-		SetRetries(config.GetHttpRetries()).
-		SetHttpClient(config.GetHttpClient()).
-		Build()
+	client, err := buildJFrogHttpClient(config, artDetails)
 	if err != nil {
 		return nil, err
 	}
@@ -89,25 +81,31 @@ func (sm *ArtifactoryServicesManagerImp) CreateFederatedRepository() *services.F
 func (sm *ArtifactoryServicesManagerImp) CreateLocalRepositoryWithParams(params services.LocalRepositoryBaseParams) error {
 	repositoryService := services.NewRepositoriesService(sm.client)
 	repositoryService.ArtDetails = sm.config.GetServiceDetails()
-	return repositoryService.CreateLocal(params)
+	return repositoryService.Create(params, params.Key)
 }
 
 func (sm *ArtifactoryServicesManagerImp) CreateRemoteRepositoryWithParams(params services.RemoteRepositoryBaseParams) error {
 	repositoryService := services.NewRepositoriesService(sm.client)
 	repositoryService.ArtDetails = sm.config.GetServiceDetails()
-	return repositoryService.CreateRemote(params)
+	return repositoryService.Create(params, params.Key)
 }
 
 func (sm *ArtifactoryServicesManagerImp) CreateVirtualRepositoryWithParams(params services.VirtualRepositoryBaseParams) error {
 	repositoryService := services.NewRepositoriesService(sm.client)
 	repositoryService.ArtDetails = sm.config.GetServiceDetails()
-	return repositoryService.CreateVirtual(params)
+	return repositoryService.Create(params, params.Key)
 }
 
 func (sm *ArtifactoryServicesManagerImp) CreateFederatedRepositoryWithParams(params services.FederatedRepositoryBaseParams) error {
 	repositoryService := services.NewRepositoriesService(sm.client)
 	repositoryService.ArtDetails = sm.config.GetServiceDetails()
-	return repositoryService.CreateFederated(params)
+	return repositoryService.Create(params, params.Key)
+}
+
+func (sm *ArtifactoryServicesManagerImp) CreateRepositoryWithParams(params interface{}, repoName string) error {
+	repositoryService := services.NewRepositoriesService(sm.client)
+	repositoryService.ArtDetails = sm.config.GetServiceDetails()
+	return repositoryService.Create(params, repoName)
 }
 
 func (sm *ArtifactoryServicesManagerImp) UpdateLocalRepository() *services.LocalRepositoryService {
@@ -134,6 +132,12 @@ func (sm *ArtifactoryServicesManagerImp) UpdateFederatedRepository() *services.F
 	return repositoryService
 }
 
+func (sm *ArtifactoryServicesManagerImp) UpdateRepositoryWithParams(params interface{}, repoName string) error {
+	repositoryService := services.NewRepositoriesService(sm.client)
+	repositoryService.ArtDetails = sm.config.GetServiceDetails()
+	return repositoryService.Update(params, repoName)
+}
+
 func (sm *ArtifactoryServicesManagerImp) DeleteRepository(repoKey string) error {
 	deleteRepositoryService := services.NewDeleteRepositoryService(sm.client)
 	deleteRepositoryService.ArtDetails = sm.config.GetServiceDetails()
@@ -146,6 +150,12 @@ func (sm *ArtifactoryServicesManagerImp) GetRepository(repoKey string, repoDetai
 	return repositoriesService.Get(repoKey, repoDetails)
 }
 
+func (sm *ArtifactoryServicesManagerImp) GetPackageLeadFile(leadFileParams services.LeadFileParams) ([]byte, error) {
+	packageService := services.NewPackageService(sm.client)
+	packageService.ArtDetails = sm.config.GetServiceDetails()
+	return packageService.GetPackageLeadFile(leadFileParams)
+}
+
 func (sm *ArtifactoryServicesManagerImp) GetAllRepositories() (*[]services.RepositoryDetails, error) {
 	repositoriesService := services.NewRepositoriesService(sm.client)
 	repositoriesService.ArtDetails = sm.config.GetServiceDetails()
@@ -156,6 +166,12 @@ func (sm *ArtifactoryServicesManagerImp) GetAllRepositoriesFiltered(params servi
 	repositoriesService := services.NewRepositoriesService(sm.client)
 	repositoriesService.ArtDetails = sm.config.GetServiceDetails()
 	return repositoriesService.GetWithFilter(params)
+}
+
+func (sm *ArtifactoryServicesManagerImp) IsRepoExists(repoKey string) (bool, error) {
+	repositoriesService := services.NewRepositoriesService(sm.client)
+	repositoriesService.ArtDetails = sm.config.GetServiceDetails()
+	return repositoriesService.IsExists(repoKey)
 }
 
 func (sm *ArtifactoryServicesManagerImp) CreatePermissionTarget(params services.PermissionTargetParams) error {
@@ -186,6 +202,12 @@ func (sm *ArtifactoryServicesManagerImp) PublishBuildInfo(build *buildinfo.Build
 	buildInfoService := services.NewBuildInfoService(sm.config.GetServiceDetails(), sm.client)
 	buildInfoService.DryRun = sm.config.IsDryRun()
 	return buildInfoService.PublishBuildInfo(build, projectKey)
+}
+
+func (sm *ArtifactoryServicesManagerImp) DeleteBuildInfo(build *buildinfo.BuildInfo, projectKey string, numberOfBuildOccurrencesToBeDeleted int) error {
+	buildInfoService := services.NewBuildInfoService(sm.config.GetServiceDetails(), sm.client)
+	buildInfoService.DryRun = sm.config.IsDryRun()
+	return buildInfoService.DeleteBuildInfo(build, projectKey, numberOfBuildOccurrencesToBeDeleted)
 }
 
 func (sm *ArtifactoryServicesManagerImp) DistributeBuild(params services.BuildDistributionParams) error {
@@ -285,26 +307,41 @@ func (sm *ArtifactoryServicesManagerImp) DeleteProps(params services.PropsParams
 	setPropsService.Threads = sm.config.GetThreads()
 	return setPropsService.DeleteProps(params)
 }
-func (sm *ArtifactoryServicesManagerImp) initUploadService() *services.UploadService {
+
+func (sm *ArtifactoryServicesManagerImp) GetItemProps(relativePath string) (*utils.ItemProperties, error) {
+	setPropsService := services.NewPropsService(sm.client)
+	setPropsService.ArtDetails = sm.config.GetServiceDetails()
+	return setPropsService.GetItemProperties(relativePath)
+}
+
+type UploadServiceOptions struct {
+	// Fail the operation immediately if an error occurs.
+	FailFast bool
+}
+
+func (sm *ArtifactoryServicesManagerImp) initUploadService(uploadServiceOptions UploadServiceOptions) *services.UploadService {
 	uploadService := services.NewUploadService(sm.client)
 	uploadService.Threads = sm.config.GetThreads()
 	uploadService.ArtDetails = sm.config.GetServiceDetails()
 	uploadService.DryRun = sm.config.IsDryRun()
+	uploadService.SetFailFast(uploadServiceOptions.FailFast)
 	uploadService.Progress = sm.progress
+	httpClientDetails := uploadService.ArtDetails.CreateHttpClientDetails()
+	uploadService.MultipartUpload = utils.NewMultipartUpload(sm.client, &httpClientDetails, uploadService.ArtDetails.GetUrl())
 	return uploadService
 }
 
-func (sm *ArtifactoryServicesManagerImp) UploadFiles(params ...services.UploadParams) (totalUploaded, totalFailed int, err error) {
-	uploadService := sm.initUploadService()
-	summary, e := uploadService.UploadFiles(params...)
-	if e != nil {
-		return 0, 0, e
+func (sm *ArtifactoryServicesManagerImp) UploadFiles(uploadServiceOptions UploadServiceOptions, params ...services.UploadParams) (totalUploaded, totalFailed int, err error) {
+	uploadService := sm.initUploadService(uploadServiceOptions)
+	summary, err := uploadService.UploadFiles(params...)
+	if summary == nil {
+		return 0, 0, err
 	}
-	return summary.TotalSucceeded, summary.TotalFailed, nil
+	return summary.TotalSucceeded, summary.TotalFailed, err
 }
 
-func (sm *ArtifactoryServicesManagerImp) UploadFilesWithSummary(params ...services.UploadParams) (operationSummary *utils.OperationSummary, err error) {
-	uploadService := sm.initUploadService()
+func (sm *ArtifactoryServicesManagerImp) UploadFilesWithSummary(uploadServiceOptions UploadServiceOptions, params ...services.UploadParams) (operationSummary *utils.OperationSummary, err error) {
+	uploadService := sm.initUploadService(uploadServiceOptions)
 	uploadService.SetSaveSummary(true)
 	return uploadService.UploadFiles(params...)
 }
@@ -343,6 +380,11 @@ func (sm *ArtifactoryServicesManagerImp) GetBuildInfo(params services.BuildInfoP
 	return buildInfoService.GetBuildInfo(params)
 }
 
+func (sm *ArtifactoryServicesManagerImp) GetBuildRuns(params services.BuildInfoParams) (*buildinfo.BuildRuns, bool, error) {
+	buildInfoService := services.NewBuildInfoService(sm.config.GetServiceDetails(), sm.client)
+	return buildInfoService.GetBuildRuns(params)
+}
+
 func (sm *ArtifactoryServicesManagerImp) CreateAPIKey() (string, error) {
 	securityService := services.NewSecurityService(sm.client)
 	securityService.ArtDetails = sm.config.GetServiceDetails()
@@ -361,7 +403,7 @@ func (sm *ArtifactoryServicesManagerImp) GetAPIKey() (string, error) {
 	return securityService.GetAPIKey()
 }
 
-func (sm *ArtifactoryServicesManagerImp) CreateToken(params services.CreateTokenParams) (services.CreateTokenResponseData, error) {
+func (sm *ArtifactoryServicesManagerImp) CreateToken(params services.CreateTokenParams) (auth.CreateTokenResponseData, error) {
 	securityService := services.NewSecurityService(sm.client)
 	securityService.ArtDetails = sm.config.GetServiceDetails()
 	return securityService.CreateToken(params)
@@ -379,7 +421,7 @@ func (sm *ArtifactoryServicesManagerImp) GetUserTokens(username string) ([]strin
 	return securityService.GetUserTokens(username)
 }
 
-func (sm *ArtifactoryServicesManagerImp) RefreshToken(params services.RefreshTokenParams) (services.CreateTokenResponseData, error) {
+func (sm *ArtifactoryServicesManagerImp) RefreshToken(params services.ArtifactoryRefreshTokenParams) (auth.CreateTokenResponseData, error) {
 	securityService := services.NewSecurityService(sm.client)
 	securityService.ArtDetails = sm.config.GetServiceDetails()
 	return securityService.RefreshToken(params)
@@ -443,10 +485,36 @@ func (sm *ArtifactoryServicesManagerImp) GetServiceId() (string, error) {
 	return systemService.GetServiceId()
 }
 
+func (sm *ArtifactoryServicesManagerImp) GetRunningNodes() ([]string, error) {
+	systemService := services.NewSystemService(sm.config.GetServiceDetails(), sm.client)
+	return systemService.GetRunningNodes()
+}
+
+func (sm *ArtifactoryServicesManagerImp) GetConfigDescriptor() (string, error) {
+	systemService := services.NewSystemService(sm.config.GetServiceDetails(), sm.client)
+	return systemService.GetConfigDescriptor()
+}
+
+func (sm *ArtifactoryServicesManagerImp) ActivateKeyEncryption() error {
+	systemService := services.NewSystemService(sm.config.GetServiceDetails(), sm.client)
+	return systemService.ActivateKeyEncryption()
+}
+
+func (sm *ArtifactoryServicesManagerImp) DeactivateKeyEncryption() (bool, error) {
+	systemService := services.NewSystemService(sm.config.GetServiceDetails(), sm.client)
+	return systemService.DeactivateKeyEncryption()
+}
+
 func (sm *ArtifactoryServicesManagerImp) GetGroup(params services.GroupParams) (*services.Group, error) {
 	groupService := services.NewGroupService(sm.client)
 	groupService.ArtDetails = sm.config.GetServiceDetails()
 	return groupService.GetGroup(params)
+}
+
+func (sm *ArtifactoryServicesManagerImp) GetAllGroups() (*[]string, error) {
+	groupService := services.NewGroupService(sm.client)
+	groupService.ArtDetails = sm.config.GetServiceDetails()
+	return groupService.GetAllGroups()
 }
 
 func (sm *ArtifactoryServicesManagerImp) CreateGroup(params services.GroupParams) error {
@@ -497,11 +565,75 @@ func (sm *ArtifactoryServicesManagerImp) DeleteUser(name string) error {
 	return userService.DeleteUser(name)
 }
 
+func (sm *ArtifactoryServicesManagerImp) GetLockedUsers() ([]string, error) {
+	userService := services.NewUserService(sm.client)
+	userService.ArtDetails = sm.config.GetServiceDetails()
+	return userService.GetLockedUsers()
+}
+
+func (sm *ArtifactoryServicesManagerImp) UnlockUser(name string) error {
+	userService := services.NewUserService(sm.client)
+	userService.ArtDetails = sm.config.GetServiceDetails()
+	return userService.UnlockUser(name)
+}
+
 func (sm *ArtifactoryServicesManagerImp) PromoteDocker(params services.DockerPromoteParams) error {
 	systemService := services.NewDockerPromoteService(sm.config.GetServiceDetails(), sm.client)
 	return systemService.PromoteDocker(params)
 }
 
+func (sm *ArtifactoryServicesManagerImp) Export(params services.ExportParams) error {
+	exportService := services.NewExportService(sm.config.GetServiceDetails(), sm.client)
+	return exportService.Export(params)
+}
+
 func (sm *ArtifactoryServicesManagerImp) Client() *jfroghttpclient.JfrogHttpClient {
 	return sm.client
+}
+
+func (sm *ArtifactoryServicesManagerImp) FolderInfo(relativePath string) (*utils.FolderInfo, error) {
+	storageService := services.NewStorageService(sm.config.GetServiceDetails(), sm.client)
+	return storageService.FolderInfo(relativePath)
+}
+
+func (sm *ArtifactoryServicesManagerImp) FileInfo(relativePath string) (*utils.FileInfo, error) {
+	storageService := services.NewStorageService(sm.config.GetServiceDetails(), sm.client)
+	return storageService.FileInfo(relativePath)
+}
+
+func (sm *ArtifactoryServicesManagerImp) FileList(relativePath string, optionalParams utils.FileListParams) (*utils.FileListResponse, error) {
+	storageService := services.NewStorageService(sm.config.GetServiceDetails(), sm.client)
+	return storageService.FileList(relativePath, optionalParams)
+}
+
+func (sm *ArtifactoryServicesManagerImp) GetStorageInfo() (*utils.StorageInfo, error) {
+	storageService := services.NewStorageService(sm.config.GetServiceDetails(), sm.client)
+	return storageService.StorageInfo()
+}
+
+func (sm *ArtifactoryServicesManagerImp) CalculateStorageInfo() error {
+	storageService := services.NewStorageService(sm.config.GetServiceDetails(), sm.client)
+	return storageService.StorageInfoRefresh()
+}
+
+func (sm *ArtifactoryServicesManagerImp) ImportReleaseBundle(filePath string) error {
+	releaseService := services.NewReleaseService(sm.config.GetServiceDetails(), sm.client)
+	return releaseService.ImportReleaseBundle(filePath)
+}
+
+func buildJFrogHttpClient(config config.Config, authDetails auth.ServiceDetails) (*jfroghttpclient.JfrogHttpClient, error) {
+	return jfroghttpclient.JfrogClientBuilder().
+		SetCertificatesPath(config.GetCertificatesPath()).
+		SetInsecureTls(config.IsInsecureTls()).
+		SetContext(config.GetContext()).
+		SetDialTimeout(config.GetDialTimeout()).
+		SetOverallRequestTimeout(config.GetOverallRequestTimeout()).
+		SetClientCertPath(authDetails.GetClientCertPath()).
+		SetClientCertKeyPath(authDetails.GetClientCertKeyPath()).
+		AppendPreRequestInterceptor(authDetails.RunPreRequestFunctions).
+		SetContext(config.GetContext()).
+		SetRetries(config.GetHttpRetries()).
+		SetRetryWaitMilliSecs(config.GetHttpRetryWaitMilliSecs()).
+		SetHttpClient(config.GetHttpClient()).
+		Build()
 }

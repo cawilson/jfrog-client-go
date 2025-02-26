@@ -8,7 +8,6 @@ import (
 
 	"github.com/jfrog/jfrog-client-go/http/jfroghttpclient"
 
-	artUtils "github.com/jfrog/jfrog-client-go/artifactory/services/utils"
 	"github.com/jfrog/jfrog-client-go/auth"
 	clientutils "github.com/jfrog/jfrog-client-go/utils"
 	"github.com/jfrog/jfrog-client-go/utils/errorutils"
@@ -59,15 +58,15 @@ func (xps *PolicyService) getPolicyURL() string {
 // It will error if no policy can be found by that name.
 func (xps *PolicyService) Delete(policyName string) error {
 	httpClientsDetails := xps.XrayDetails.CreateHttpClientDetails()
-	artUtils.SetContentType("application/json", &httpClientsDetails.Headers)
+	httpClientsDetails.SetContentTypeApplicationJson()
 
 	log.Info("Deleting policy...")
 	resp, body, err := xps.client.SendDelete(xps.getPolicyURL()+"/"+policyName, nil, &httpClientsDetails)
 	if err != nil {
 		return err
 	}
-	if err = errorutils.CheckResponseStatus(resp, http.StatusOK); err != nil {
-		return errorutils.CheckError(errorutils.GenerateResponseError(resp.Status, clientutils.IndentJson(body)))
+	if err = errorutils.CheckResponseStatusWithBody(resp, body, http.StatusOK); err != nil {
+		return err
 	}
 	log.Debug("Xray response:", resp.Status)
 	log.Info("Done deleting policy.")
@@ -76,30 +75,27 @@ func (xps *PolicyService) Delete(policyName string) error {
 
 // Create will create a new Xray policy
 func (xps *PolicyService) Create(params utils.PolicyParams) error {
-	body := utils.CreatePolicyBody(params)
-	content, err := json.Marshal(body)
+	policyBody := utils.CreatePolicyBody(params)
+	content, err := json.Marshal(policyBody)
 	if err != nil {
 		return errorutils.CheckError(err)
 	}
 
 	httpClientsDetails := xps.XrayDetails.CreateHttpClientDetails()
-	artUtils.SetContentType("application/json", &httpClientsDetails.Headers)
+	httpClientsDetails.SetContentTypeApplicationJson()
 	var url = xps.getPolicyURL()
-	var resp *http.Response
-	var respBody []byte
 
 	log.Info(fmt.Sprintf("Creating a new Policy named %s on JFrog Xray....", params.Name))
-	resp, respBody, err = xps.client.SendPost(url, content, &httpClientsDetails)
+	resp, body, err := xps.client.SendPost(url, content, &httpClientsDetails)
 	if err != nil {
 		return err
 	}
 
-	if err = errorutils.CheckResponseStatus(resp, http.StatusOK, http.StatusCreated); err != nil {
-		err = errorutils.GenerateResponseError(resp.Status, clientutils.IndentJson(respBody))
+	if err = errorutils.CheckResponseStatusWithBody(resp, body, http.StatusOK, http.StatusCreated); err != nil {
 		if resp.StatusCode == http.StatusConflict {
-			return errorutils.CheckError(&PolicyAlreadyExistsError{InnerError: err})
+			return &PolicyAlreadyExistsError{InnerError: err}
 		}
-		return errorutils.CheckError(err)
+		return err
 	}
 	log.Debug("Xray response:", resp.Status)
 	log.Info("Done creating policy.")
@@ -109,26 +105,24 @@ func (xps *PolicyService) Create(params utils.PolicyParams) error {
 // Update will update an existing Xray policy by name
 // It will error if no policy can be found by that name.
 func (xps *PolicyService) Update(params utils.PolicyParams) error {
-	body := utils.CreatePolicyBody(params)
-	content, err := json.Marshal(body)
+	policyBody := utils.CreatePolicyBody(params)
+	content, err := json.Marshal(policyBody)
 	if err != nil {
 		return errorutils.CheckError(err)
 	}
 
 	httpClientsDetails := xps.XrayDetails.CreateHttpClientDetails()
-	artUtils.SetContentType("application/json", &httpClientsDetails.Headers)
+	httpClientsDetails.SetContentTypeApplicationJson()
 	var url = xps.getPolicyURL() + "/" + params.Name
-	var resp *http.Response
-	var respBody []byte
 
 	log.Info("Updating policy...")
-	resp, respBody, err = xps.client.SendPut(url, content, &httpClientsDetails)
+	resp, body, err := xps.client.SendPut(url, content, &httpClientsDetails)
 
 	if err != nil {
 		return err
 	}
-	if err = errorutils.CheckResponseStatus(resp, http.StatusOK, http.StatusCreated); err != nil {
-		return errorutils.CheckError(errorutils.GenerateResponseError(resp.Status, clientutils.IndentJson(respBody)))
+	if err = errorutils.CheckResponseStatusWithBody(resp, body, http.StatusOK, http.StatusCreated); err != nil {
+		return err
 	}
 	log.Debug("Xray response:", resp.Status)
 	log.Info("Done updating policy.")
@@ -146,8 +140,8 @@ func (xps *PolicyService) Get(policyName string) (policyResp *utils.PolicyParams
 	if err != nil {
 		return &utils.PolicyParams{}, err
 	}
-	if err = errorutils.CheckResponseStatus(resp, http.StatusOK); err != nil {
-		return &utils.PolicyParams{}, errorutils.CheckError(errorutils.GenerateResponseError(resp.Status, clientutils.IndentJson(body)))
+	if err = errorutils.CheckResponseStatusWithBody(resp, body, http.StatusOK); err != nil {
+		return &utils.PolicyParams{}, err
 	}
 
 	err = json.Unmarshal(body, policy)

@@ -14,7 +14,7 @@ func init() {
 func TestBuildParsingNoBuildNumber(t *testing.T) {
 	buildName, buildNumber, err := ParseNameAndVersion("CLI-Build-Name", true)
 	assert.NoError(t, err)
-	expectedBuildName, expectedBuildNumber := "CLI-Build-Name", "LATEST"
+	expectedBuildName, expectedBuildNumber := "CLI-Build-Name", LatestBuildNumberKey
 	if buildName != expectedBuildName {
 		t.Error("Unexpected result from 'ParseNameAndVersion' method. \nExpected build name: 	" + expectedBuildName + " \nGot:     		 		" + buildName)
 	}
@@ -62,7 +62,7 @@ func TestBuildParsingBuildNumberWithEscapeCharsInTheBuildNumber(t *testing.T) {
 func TestBuildParsingBuildNumberWithOnlyEscapeChars(t *testing.T) {
 	buildName, buildNumber, err := ParseNameAndVersion("CLI-Build-Name\\/1\\/2\\/3\\/4", true)
 	assert.NoError(t, err)
-	expectedBuildName, expectedBuildNumber := "CLI-Build-Name/1/2/3/4", "LATEST"
+	expectedBuildName, expectedBuildNumber := "CLI-Build-Name/1/2/3/4", LatestBuildNumberKey
 	if buildName != expectedBuildName {
 		t.Error("Unexpected result from 'ParseNameAndVersion' method. \nExpected build name: 	" + expectedBuildName + " \nGot:     		 		" + buildName)
 	}
@@ -74,7 +74,7 @@ func TestBuildParsingBuildNumberWithOnlyEscapeChars(t *testing.T) {
 func TestBundleParsingNoBundleVersion(t *testing.T) {
 	log.SetLogger(log.NewLogger(log.DEBUG, nil))
 	_, _, err := ParseNameAndVersion("CLI-Bundle-Name", false)
-	assert.EqualError(t, err, "No '/' is found in 'CLI-Bundle-Name'")
+	assert.EqualError(t, err, "no '/' is found in 'CLI-Bundle-Name'")
 }
 
 func TestBundleParsingBundleVersionProvided(t *testing.T) {
@@ -115,5 +115,5 @@ func TestBundleParsingBundleVersionWithEscapeCharsInTheBundleVersion(t *testing.
 
 func TestBundleParsingBundleVersionWithOnlyEscapeChars(t *testing.T) {
 	_, _, err := ParseNameAndVersion("CLI-Bundle-Name\\/1\\/2\\/3\\/4", false)
-	assert.EqualError(t, err, "No delimiter char (/) without escaping char was found in 'CLI-Bundle-Name\\/1\\/2\\/3\\/4'")
+	assert.EqualError(t, err, "no delimiter char (/) without escaping char was found in 'CLI-Bundle-Name\\/1\\/2\\/3\\/4'")
 }

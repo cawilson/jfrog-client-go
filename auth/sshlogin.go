@@ -4,8 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
-	"io/ioutil"
-	"regexp"
+	"os"
 	"strconv"
 
 	"github.com/jfrog/jfrog-client-go/utils"
@@ -35,7 +34,7 @@ func SshAuthentication(url, sshKeyPath, sshPassphrase string) (sshAuthHeaders ma
 		log.Debug("Trying to authenticate via SSH Key...")
 
 		// Check if key specified
-		if len(sshKeyPath) <= 0 {
+		if len(sshKeyPath) == 0 {
 			log.Error("Authentication via SSH key failed.")
 			return nil, "", errorutils.CheckErrorf("SSH key not specified.")
 		}
@@ -70,6 +69,7 @@ func getSshHeaders(sshAuth ssh.AuthMethod, host string, port int) (map[string]st
 		Auth: []ssh.AuthMethod{
 			sshAuth,
 		},
+		//#nosec G106 -- Used to get ssh headers only.
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 	}
 
@@ -94,8 +94,10 @@ func getSshHeaders(sshAuth ssh.AuthMethod, host string, port int) (map[string]st
 		return nil, "", errorutils.CheckError(err)
 	}
 	var buf bytes.Buffer
-	io.Copy(&buf, stdout)
-
+	_, err = io.Copy(&buf, stdout)
+	if errorutils.CheckError(err) != nil {
+		return nil, "", err
+	}
 	var result SshAuthResult
 	if err = json.Unmarshal(buf.Bytes(), &result); errorutils.CheckError(err) != nil {
 		return nil, "", err
@@ -106,7 +108,7 @@ func getSshHeaders(sshAuth ssh.AuthMethod, host string, port int) (map[string]st
 }
 
 func readSshKeyAndPassphrase(sshKeyPath, sshPassphrase string) ([]byte, []byte, error) {
-	sshKey, err := ioutil.ReadFile(utils.ReplaceTildeWithUserHome(sshKeyPath))
+	sshKey, err := os.ReadFile(utils.ReplaceTildeWithUserHome(sshKeyPath))
 	if err != nil {
 		return nil, nil, errorutils.CheckError(err)
 	}
@@ -126,11 +128,9 @@ func readSshKeyAndPassphrase(sshKeyPath, sshPassphrase string) ([]byte, []byte, 
 
 func IsEncrypted(buffer []byte) (bool, error) {
 	_, err := ssh.ParsePrivateKey(buffer)
-	if err != nil {
-		if _, ok := err.(*ssh.PassphraseMissingError); ok {
-			// Key is encrypted
-			return true, nil
-		}
+	if _, ok := err.(*ssh.PassphraseMissingError); ok {
+		// Key is encrypted
+		return true, nil
 	}
 	// Key is not encrypted or an error occurred
 	return false, err
@@ -140,9 +140,8 @@ func parseUrl(url string) (protocol, host string, port int, err error) {
 	pattern1 := "^(.+)://(.+):([0-9].+)/$"
 	pattern2 := "^(.+)://(.+)$"
 
-	var r *regexp.Regexp
-	r, err = regexp.Compile(pattern1)
-	if errorutils.CheckError(err) != nil {
+	r, err := utils.GetRegExp(pattern1)
+	if err != nil {
 		return
 	}
 	groups := r.FindStringSubmatch(url)
@@ -156,8 +155,7 @@ func parseUrl(url string) (protocol, host string, port int, err error) {
 		return
 	}
 
-	r, err = regexp.Compile(pattern2)
-	err = errorutils.CheckError(err)
+	r, err = utils.GetRegExp(pattern2)
 	if err != nil {
 		return
 	}

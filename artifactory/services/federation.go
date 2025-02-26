@@ -4,10 +4,8 @@ import (
 	"net/http"
 	"net/url"
 
-	"github.com/jfrog/jfrog-client-go/artifactory/services/utils"
 	"github.com/jfrog/jfrog-client-go/auth"
 	"github.com/jfrog/jfrog-client-go/http/jfroghttpclient"
-	clientutils "github.com/jfrog/jfrog-client-go/utils"
 	"github.com/jfrog/jfrog-client-go/utils/errorutils"
 	"github.com/jfrog/jfrog-client-go/utils/log"
 )
@@ -27,17 +25,16 @@ func (fs *FederationService) SetArtifactoryDetails(rt auth.ServiceDetails) {
 
 func (fs *FederationService) ConvertLocalToFederated(repoKey string) error {
 	httpClientsDetails := fs.ArtDetails.CreateHttpClientDetails()
-	utils.SetContentType("application/json", &httpClientsDetails.Headers)
+	httpClientsDetails.SetContentTypeApplicationJson()
 	var url = fs.ArtDetails.GetUrl() + "api/federation/migrate/" + url.PathEscape(repoKey)
 	log.Info("Converting local repository to federated repository...")
 	resp, body, err := fs.client.SendPost(url, nil, &httpClientsDetails)
 	if err != nil {
 		return err
 	}
-	if resp.StatusCode != http.StatusOK {
-		return errorutils.CheckErrorf("Artifactory response: " + resp.Status + "\n" + clientutils.IndentJson(body))
+	if err = errorutils.CheckResponseStatusWithBody(resp, body, http.StatusOK); err != nil {
+		return err
 	}
-
 	log.Debug("Artifactory response:", resp.Status)
 	log.Info("Done converting repository.")
 	return nil
@@ -45,17 +42,16 @@ func (fs *FederationService) ConvertLocalToFederated(repoKey string) error {
 
 func (fs *FederationService) TriggerFederatedFullSyncAll(repoKey string) error {
 	httpClientsDetails := fs.ArtDetails.CreateHttpClientDetails()
-	utils.SetContentType("application/json", &httpClientsDetails.Headers)
+	httpClientsDetails.SetContentTypeApplicationJson()
 	var url = fs.ArtDetails.GetUrl() + "api/federation/fullSync/" + url.PathEscape(repoKey)
 	log.Info("Triggering full federated repository synchronisation...")
 	resp, body, err := fs.client.SendPost(url, nil, &httpClientsDetails)
 	if err != nil {
 		return err
 	}
-	if resp.StatusCode != http.StatusOK {
-		return errorutils.CheckErrorf("Artifactory response: " + resp.Status + "\n" + clientutils.IndentJson(body))
+	if err = errorutils.CheckResponseStatusWithBody(resp, body, http.StatusOK); err != nil {
+		return err
 	}
-
 	log.Debug("Artifactory response:", resp.Status)
 	log.Info("Done triggering full federated repository synchronisation.")
 	return nil
@@ -63,17 +59,16 @@ func (fs *FederationService) TriggerFederatedFullSyncAll(repoKey string) error {
 
 func (fs *FederationService) TriggerFederatedFullSyncMirror(repoKey string, mirrorUrl string) error {
 	httpClientsDetails := fs.ArtDetails.CreateHttpClientDetails()
-	utils.SetContentType("application/json", &httpClientsDetails.Headers)
+	httpClientsDetails.SetContentTypeApplicationJson()
 	var url = fs.ArtDetails.GetUrl() + "api/federation/fullSync/" + url.PathEscape(repoKey) + "?mirror=" + url.QueryEscape(mirrorUrl)
 	log.Info("Triggering federated repository synchronisation...")
 	resp, body, err := fs.client.SendPost(url, nil, &httpClientsDetails)
 	if err != nil {
 		return err
 	}
-	if resp.StatusCode != http.StatusOK {
-		return errorutils.CheckErrorf("Artifactory response: " + resp.Status + "\n" + clientutils.IndentJson(body))
+	if err = errorutils.CheckResponseStatusWithBody(resp, body, http.StatusOK); err != nil {
+		return err
 	}
-
 	log.Debug("Artifactory response:", resp.Status)
 	log.Info("Done triggering federated repository synchronisation.")
 	return nil

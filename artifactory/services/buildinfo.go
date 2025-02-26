@@ -2,6 +2,7 @@ package services
 
 import (
 	"encoding/json"
+	"fmt"
 	buildinfo "github.com/jfrog/build-info-go/entities"
 	"net/http"
 
@@ -17,6 +18,14 @@ type BuildInfoService struct {
 	client     *jfroghttpclient.JfrogHttpClient
 	artDetails *auth.ServiceDetails
 	DryRun     bool
+}
+
+type DeleteBuildInfoBody struct {
+	BuildName       string   `json:"buildName,omitempty"`
+	Project         string   `json:"project,omitempty"`
+	BuildNumber     []string `json:"buildNumbers,omitempty"`
+	DeleteArtifacts bool     `json:"deleteArtifacts,omitempty"`
+	DeleteAll       bool     `json:"deleteAll,omitempty"`
 }
 
 func NewBuildInfoService(artDetails auth.ServiceDetails, client *jfroghttpclient.JfrogHttpClient) *BuildInfoService {
@@ -52,6 +61,13 @@ func (bis *BuildInfoService) GetBuildInfo(params BuildInfoParams) (pbi *buildinf
 	return utils.GetBuildInfo(params.BuildName, params.BuildNumber, params.ProjectKey, bis)
 }
 
+// Returns the build runs for the requested build info name.
+// If build info was not found (404), returns found=false (with error nil).
+// For any other response that isn't 200, an error is returned.
+func (bis *BuildInfoService) GetBuildRuns(params BuildInfoParams) (runs *buildinfo.BuildRuns, found bool, err error) {
+	return utils.GetBuildRuns(params.BuildName, params.ProjectKey, bis)
+}
+
 func (bis *BuildInfoService) PublishBuildInfo(build *buildinfo.BuildInfo, projectKey string) (*clientutils.Sha256Summary, error) {
 	summary := clientutils.NewSha256Summary()
 	content, err := json.Marshal(build)
@@ -61,21 +77,59 @@ func (bis *BuildInfoService) PublishBuildInfo(build *buildinfo.BuildInfo, projec
 	if bis.IsDryRun() {
 		log.Info("[Dry run] Logging Build info preview...")
 		log.Output(clientutils.IndentJson(content))
-		return summary, err
+		return summary, nil
 	}
 	httpClientsDetails := bis.GetArtifactoryDetails().CreateHttpClientDetails()
 	utils.SetContentType("application/vnd.org.jfrog.artifactory+json", &httpClientsDetails.Headers)
-	log.Info("Deploying build info...")
+	log.Info(fmt.Sprintf("Publishing build info for <%s>/<%s>...", build.Name, build.Number))
 	resp, body, err := bis.client.SendPut(bis.GetArtifactoryDetails().GetUrl()+"api/build"+utils.GetProjectQueryParam(projectKey), content, &httpClientsDetails)
 	if err != nil {
-		return summary, err
+		return summary, fmt.Errorf("error occurred while publishing build info: %s", err.Error())
 	}
-	if err = errorutils.CheckResponseStatus(resp, http.StatusOK, http.StatusCreated, http.StatusNoContent); err != nil {
-		return summary, errorutils.CheckError(errorutils.GenerateResponseError(resp.Status, clientutils.IndentJson(body)))
+	if err = errorutils.CheckResponseStatusWithBody(resp, body, http.StatusOK, http.StatusCreated, http.StatusNoContent); err != nil {
+		return summary, err
 	}
 	summary.SetSucceeded(true)
 	summary.SetSha256(resp.Header.Get("X-Checksum-Sha256"))
 
 	log.Debug("Artifactory response:", resp.Status)
 	return summary, nil
+}
+
+func (bis *BuildInfoService) DeleteBuildInfo(build *buildinfo.BuildInfo, projectKey string, numberOfBuildOccurrencesToBeDeleted int) error {
+	params := createDeleteBuildInfoBody(build, projectKey, numberOfBuildOccurrencesToBeDeleted)
+	content, err := json.Marshal(params)
+	if err != nil {
+		return errorutils.CheckError(err)
+	}
+	if bis.IsDryRun() {
+		log.Info("[Dry run] Deleting build info preview...")
+		log.Output(clientutils.IndentJson(content))
+		return nil
+	}
+	httpClientsDetails := bis.GetArtifactoryDetails().CreateHttpClientDetails()
+	httpClientsDetails.SetContentTypeApplicationJson()
+	resp, body, err := bis.client.SendPost(bis.GetArtifactoryDetails().GetUrl()+"api/build/delete", content, &httpClientsDetails)
+	if err != nil {
+		return fmt.Errorf("error occurred while deleting build info: %w", err)
+	}
+	if err = errorutils.CheckResponseStatusWithBody(resp, body, http.StatusOK, http.StatusNoContent); err != nil {
+		return err
+	}
+	log.Debug("Artifactory response", resp.Status)
+	return nil
+}
+
+func createDeleteBuildInfoBody(build *buildinfo.BuildInfo, projectKey string, numberOfBuildOccurrencesToBeDeleted int) DeleteBuildInfoBody {
+	buildNumbers := make([]string, 0, numberOfBuildOccurrencesToBeDeleted)
+	for i := 0; i < numberOfBuildOccurrencesToBeDeleted; i++ {
+		buildNumbers = append(buildNumbers, build.Number)
+	}
+	return DeleteBuildInfoBody{
+		BuildName:       build.Name,
+		BuildNumber:     buildNumbers,
+		Project:         projectKey,
+		DeleteArtifacts: false,
+		DeleteAll:       false,
+	}
 }
